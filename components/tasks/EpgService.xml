@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ShaGa IPTV Player — free player for your own M3U/M3U8 playlists -->
+<!-- ShaGa IPTV Player — бесплатный плеер для собственных плейлистов M3U/M3U8 -->
+<!-- TV guide service: a long-running Task that keeps the XMLTV programme and
+     answers the scene, so thousands of programmes are not copied between threads. -->
+<!-- Служба телепрограммы: долгоживущая задача, хранит программу XMLTV у себя и
+     отвечает сцене, чтобы тысячи передач не копировались между потоками. -->
+<component name="EpgService" extends="Task">
+    <interface>
+        <!-- { action: "load", url, force, keys: { channelKey: normalizedName } } -->
+        <field id="cmd" type="assocarray" alwaysNotify="true" />
+        <!-- { state: "none"|"nourl"|"loading"|"ready"|"error", channels, updated, error } -->
+        <field id="status" type="assocarray" />
+        <!-- channelKey -> "start|end|title" of the programme on air now / передача в эфире -->
+        <field id="nowMap" type="assocarray" />
+        <!-- request: channel key / запрос: ключ канала -->
+        <field id="detailKey" type="string" alwaysNotify="true" />
+        <!-- { key, items: [ { s, e, t, d } ] } current + next / текущая и следующие -->
+        <field id="detail" type="assocarray" />
+    </interface>
+    <script type="text/brightscript" uri="EpgService.brs" />
+    <script type="text/brightscript" uri="EpgParse.brs" />
+    <script type="text/brightscript" uri="pkg:/source/config.brs" />
+    <script type="text/brightscript" uri="pkg:/source/log.brs" />
+    <script type="text/brightscript" uri="pkg:/source/textutil.brs" />
+</component>

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ShaGa IPTV Player — free player for your own M3U/M3U8 playlists -->
+<!-- ShaGa IPTV Player — бесплатный плеер для собственных плейлистов M3U/M3U8 -->
+<!-- One row of the channel list: number | logo | title, below it the current programme
+     and a thin progress bar (hidden until the TV guide exists). -->
+<!-- Строка списка каналов: номер | логотип | название, под ним текущая передача
+     и тонкая полоска прогресса (скрыта, пока нет телепрограммы). -->
+<!-- ContentNode fields / Поля ContentNode: shortDescriptionLine1 = number / номер,
+     HDPosterUrl = logo / логотип, title = name / название,
+     shortDescriptionLine2 = second line / вторая строка -->
+<component name="ChannelItem" extends="Group">
+    <interface>
+        <field id="itemContent" type="node" onChange="onContent" />
+        <field id="focusPercent" type="float" onChange="onFocus" />
+        <field id="listHasFocus" type="boolean" onChange="onFocus" />
+        <field id="width" type="float" />
+        <field id="height" type="float" />
+    </interface>
+    <script type="text/brightscript" uri="ChannelItem.brs" />
+    <children>
+        <!-- Number column fits 4 digits / Колонка номера под 4 цифры -->
+        <Label id="num" translation="[0,0]" width="84" height="84" horizAlign="right" vertAlign="center"
+            font="font:SmallSystemFont" color="0xA39DB8FF" />
+        <Poster id="logo" translation="[98,24]" width="48" height="36" loadDisplayMode="scaleToFit" />
+        <Label id="title" translation="[160,8]" width="444" height="36" font="font:SmallBoldSystemFont" color="0xECE9F6FF" />
+        <Label id="prog" translation="[160,44]" width="444" height="28" font="font:SmallestSystemFont" color="0xA39DB8FF" />
+        <Rectangle id="progBg" translation="[160,74]" width="300" height="3" color="0x322D45FF" visible="false" />
+        <Rectangle id="progBar" translation="[160,74]" width="0" height="3" color="0xA995FFFF" visible="false" />
+    </children>
+</component>
