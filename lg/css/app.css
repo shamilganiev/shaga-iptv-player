@@ -1,0 +1,524 @@
+/* Экран телевизора: фиксированные 1920x1080, крупный шрифт для просмотра с дивана.
+   Фокус — янтарный, как подсветка на старом тюнере. */
+:root {
+  --bg: #141C2E;
+  --panel: #1C2740;
+  --panel-2: #26334F;
+  --line: #33415F;
+  --text: #EEF1F7;
+  --muted: #8F9AB4;
+  --amber: #F5B83D;
+  --ink: #231803;
+  --error: #F28B7C;
+  --pad-x: 96px;
+  --pad-y: 54px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  width: 1920px;
+  height: 1080px;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "LG Smart UI", "Museo Sans", Roboto, Arial, sans-serif;
+  font-size: 28px;
+  line-height: 1.35;
+  -webkit-font-smoothing: antialiased;
+}
+body.has-video { background: #000; }
+
+button, input { font: inherit; color: inherit; }
+
+/* ---------- Видео и общие слои ---------- */
+#video {
+  position: fixed;
+  left: 0; top: 0;
+  width: 100%; height: 100%;
+  background: #000;
+  object-fit: contain;
+  z-index: 0;
+}
+
+.screen {
+  position: absolute;
+  left: 0; top: 0;
+  width: 100%; height: 100%;
+  display: none;
+  z-index: 1;
+}
+.screen.active { display: block; }
+
+.muted { color: var(--muted); }
+
+.brand {
+  display: flex;
+  align-items: center;
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+.brand-mark {
+  width: 34px; height: 24px;
+  margin-right: 16px;
+  border: 4px solid var(--amber);
+  border-radius: 6px;
+  position: relative;
+}
+.brand-mark::after {
+  content: "";
+  position: absolute;
+  left: 9px; top: 3px;
+  border-left: 9px solid var(--amber);
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+}
+
+/* ---------- Кнопки ---------- */
+.btn-row { display: flex; }
+.btn {
+  height: 76px;
+  padding: 0 44px;
+  margin-right: 24px;
+  border: 3px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  font-size: 30px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn.focus {
+  background: var(--amber);
+  border-color: var(--amber);
+  color: var(--ink);
+}
+
+.error { color: var(--error); min-height: 40px; margin: 16px 0; }
+
+/* ---------- Первый запуск ---------- */
+#setup { background: var(--bg); }
+.setup-wrap {
+  position: absolute;
+  left: 220px; top: 150px;
+  width: 1100px;
+}
+.setup-wrap h1 {
+  font-size: 72px;
+  line-height: 1.1;
+  margin: 72px 0 20px;
+  font-weight: 700;
+}
+.lead { color: var(--muted); font-size: 32px; margin: 0 0 48px; max-width: 900px; }
+#urlInput {
+  width: 100%;
+  height: 84px;
+  padding: 0 28px;
+  border: 3px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  font-size: 32px;
+  outline: none;
+}
+#urlInput.focus, #urlInput:focus { border-color: var(--amber); }
+#urlInput::placeholder { color: #5D6886; }
+.note { margin-top: 64px; color: var(--muted); font-size: 26px; max-width: 900px; }
+
+/* ---------- Список каналов ---------- */
+#browser { background: var(--bg); }
+body.has-video #browser {
+  background: linear-gradient(90deg, rgba(20,28,46,.97) 0%, rgba(20,28,46,.93) 62%, rgba(20,28,46,.6) 100%);
+}
+
+.col-groups, .col-chans, .col-info { position: absolute; top: var(--pad-y); bottom: 132px; }
+.col-groups { left: var(--pad-x); width: 420px; }
+.col-chans  { left: 560px; width: 640px; }
+.col-info   { left: 1236px; right: var(--pad-x); }
+
+.col-head {
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 34px;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+.h-text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.h-text .h-pre { color: var(--amber); font-weight: 400; margin-right: 12px; }
+
+#groupList, #chanList, #setGroups {
+  position: absolute;
+  left: 0; right: 0; top: 84px; bottom: 0;
+}
+
+.vlist { overflow: hidden; }
+.vrow {
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  display: flex;
+  align-items: center;
+  border-radius: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.vrow.sel { background: var(--panel-2); box-shadow: inset 6px 0 0 var(--amber); }
+.vrow.focus { background: var(--amber); color: var(--ink); }
+
+/* Группы */
+.g-row { padding: 0 20px 0 26px; }
+.g-row .g-name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.g-row .g-count { color: var(--muted); font-size: 24px; margin-left: 12px; }
+.g-row.focus .g-count { color: var(--ink); }
+.g-row .ico { margin-left: 10px; }
+
+/* Каналы */
+.c-row { padding: 0 20px 0 12px; }
+.c-num {
+  width: 76px;
+  flex-shrink: 0;
+  text-align: right;
+  padding-right: 16px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 24px;
+}
+.vrow.focus .c-num { color: var(--ink); }
+.c-logo {
+  width: 68px; height: 44px;
+  margin-right: 18px;
+  border-radius: 8px;
+  background: #E8ECF4;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+  position: relative;
+}
+.c-logo img { max-width: 62px; max-height: 38px; }
+.c-logo.noimg img { display: none; }
+.c-logo.noimg::after {
+  content: attr(data-l);
+  color: #4A5675;
+  font-weight: 700;
+  font-size: 28px;
+}
+.c-text { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+.c-name { font-size: 26px; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; }
+.c-prog {
+  font-size: 19px;
+  line-height: 1.25;
+  margin-top: 3px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-height: 1.25em;
+}
+.c-bar { height: 3px; margin-top: 5px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.c-bar i { display: block; height: 100%; background: var(--amber); }
+.c-bar.off { visibility: hidden; }
+.vrow.focus .c-prog { color: rgba(35,24,3,.72); }
+.vrow.focus .c-bar { background: rgba(35,24,3,.18); }
+.vrow.focus .c-bar i { background: var(--ink); }
+.c-row.playing .c-name { color: var(--amber); }
+.c-row.playing.focus .c-name { color: var(--ink); }
+.c-row.playing .c-name::before {
+  content: "";
+  display: inline-block;
+  width: 12px; height: 12px;
+  margin: 0 14px 4px 0;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.ico { width: 30px; height: 30px; margin-left: 14px; flex-shrink: 0; }
+.ico svg { width: 100%; height: 100%; fill: currentColor; display: block; }
+.ico.star { color: var(--amber); }
+.vrow.focus .ico.star { color: var(--ink); }
+.ico.lock { color: var(--muted); }
+.vrow.focus .ico.lock { color: var(--ink); }
+
+.empty {
+  position: absolute;
+  top: 120px; left: 24px;
+  max-width: 820px;
+  color: var(--muted);
+  font-size: 30px;
+  display: none;
+}
+.empty.on { display: block; }
+
+/* Подсказки по кнопкам пульта */
+.hints {
+  position: absolute;
+  left: var(--pad-x); right: var(--pad-x); bottom: 40px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  border-top: 2px solid var(--line);
+  padding-top: 18px;
+  color: var(--muted);
+  font-size: 24px;
+}
+.hint { display: flex; align-items: center; margin-right: 52px; }
+.hint .k {
+  min-width: 52px;
+  height: 36px;
+  padding: 0 10px;
+  margin-right: 12px;
+  border: 2px solid var(--muted);
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px;
+  color: var(--text);
+}
+.hint .dot { width: 26px; height: 26px; border-radius: 50%; margin-right: 12px; }
+.dot.yellow { background: #F2CC2E; }
+.dot.blue { background: #3D7FE0; }
+
+/* ---------- Просмотр ---------- */
+.banner {
+  position: absolute;
+  left: var(--pad-x); right: var(--pad-x); bottom: 64px;
+  min-height: 150px;
+  padding: 28px 40px;
+  display: flex;
+  align-items: center;
+  background: rgba(20,28,46,.9);
+  border-radius: 18px;
+  border-left: 8px solid var(--amber);
+  opacity: 0;
+  transition: opacity .25s;
+}
+.banner.on { opacity: 1; }
+.b-num {
+  font-size: 92px;
+  line-height: 1;
+  font-weight: 700;
+  color: var(--amber);
+  font-variant-numeric: tabular-nums;
+  min-width: 200px;
+  margin-right: 36px;
+}
+.b-main { flex: 1; min-width: 0; }
+.b-name { font-size: 46px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.b-sub { color: var(--muted); font-size: 28px; margin-top: 4px; }
+.b-status { max-width: 640px; font-size: 28px; color: var(--muted); text-align: right; }
+.b-status.err { color: var(--error); }
+
+/* Ввод номера канала — цифры, как на табло тюнера */
+#numosd {
+  position: fixed;
+  right: var(--pad-x); top: var(--pad-y);
+  padding: 10px 34px;
+  font-size: 120px;
+  line-height: 1.1;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--amber);
+  background: rgba(20,28,46,.88);
+  border-radius: 16px;
+  font-variant-numeric: tabular-nums;
+  z-index: 20;
+  display: none;
+}
+#numosd.on { display: block; }
+
+/* ---------- Настройки ---------- */
+#settings { background: var(--bg); }
+body.has-video #settings { background: rgba(20,28,46,.96); }
+.set-wrap {
+  position: absolute;
+  left: 220px; top: var(--pad-y); bottom: 132px;
+  width: 1300px;
+}
+.set-wrap h1 { font-size: 60px; margin: 40px 0 8px; }
+.set-wrap .lead { margin-bottom: 36px; }
+#setGroups { top: 220px; }
+.s-row {
+  height: 88px;
+  padding: 0 32px;
+  display: flex;
+  align-items: center;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.s-row .s-label { flex: 1; font-size: 32px; }
+.s-row .s-value { color: var(--muted); max-width: 720px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.s-row.focus { background: var(--amber); color: var(--ink); }
+.s-row.focus .s-value { color: var(--ink); }
+.vrow.s-row { height: auto; }
+.st-hidden { color: var(--muted); }
+.st-locked { color: var(--amber); }
+.s-row.focus .st-locked, .s-row.focus .st-hidden { color: var(--ink); }
+
+/* ---------- Ожидание, сообщения, окна ---------- */
+.spinner {
+  position: fixed;
+  left: 50%; top: 50%;
+  width: 96px; height: 96px;
+  margin: -48px 0 0 -48px;
+  border: 8px solid rgba(255,255,255,.15);
+  border-top-color: var(--amber);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+  display: none;
+  z-index: 5;
+}
+.spinner.on { display: block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+#busy {
+  position: fixed; left: 0; top: 0; width: 100%; height: 100%;
+  background: rgba(20,28,46,.92);
+  display: none;
+  z-index: 60;
+}
+#busy.on { display: block; }
+#busy p { position: absolute; top: 600px; width: 100%; text-align: center; font-size: 32px; color: var(--muted); }
+
+#toast {
+  position: fixed;
+  left: 50%; top: var(--pad-y);
+  transform: translateX(-50%);
+  max-width: 1100px;
+  padding: 22px 40px;
+  background: var(--panel-2);
+  border-radius: 14px;
+  font-size: 28px;
+  z-index: 40;
+  opacity: 0;
+  transition: opacity .2s;
+  pointer-events: none;
+}
+#toast.on { opacity: 1; }
+
+.modal {
+  position: fixed; left: 0; top: 0; width: 100%; height: 100%;
+  background: rgba(10,14,24,.78);
+  display: none;
+  z-index: 50;
+}
+.modal.on { display: block; }
+.modal .box {
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  min-width: 720px;
+  padding: 56px 64px;
+  background: var(--panel);
+  border-radius: 20px;
+  border-top: 8px solid var(--amber);
+}
+.modal h2 { font-size: 40px; margin: 0 0 40px; }
+.modal .btn-row .btn:last-child { margin-right: 0; }
+
+.pp-dots { display: flex; justify-content: center; margin-bottom: 8px; }
+.pp-dots i {
+  width: 72px; height: 88px;
+  margin: 0 10px;
+  border: 3px solid var(--line);
+  border-radius: 12px;
+  position: relative;
+}
+.pp-dots i.full::after {
+  content: "";
+  position: absolute; left: 50%; top: 50%;
+  width: 22px; height: 22px; margin: -11px 0 0 -11px;
+  border-radius: 50%;
+  background: var(--amber);
+}
+#pinpad .error { text-align: center; }
+.pp-keys { display: flex; flex-wrap: wrap; width: 420px; margin: 0 auto; }
+.pp-keys .btn {
+  width: 124px; height: 84px;
+  margin: 0 8px 12px 8px;
+  padding: 0;
+  font-size: 34px;
+}
+#pinpad h2 { text-align: center; }
+
+/* Журнал в настройках */
+#setLog {
+  position: absolute;
+  left: 0; right: 0; top: 230px; bottom: 0;
+  margin: 0;
+  padding: 24px 28px;
+  background: #0E1422;
+  border-radius: 12px;
+  font-family: "DejaVu Sans Mono", "Courier New", monospace;
+  font-size: 21px;
+  line-height: 1.45;
+  color: #C9D1E3;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow: hidden;
+  display: none;
+}
+
+/* ---------- Третья колонка: программа передач ---------- */
+.col-info { overflow: hidden; }
+.i-ch { color: var(--muted); font-size: 24px; margin: -6px 4px 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#iNowBox { padding: 12px 8px 0 4px; }
+.i-label {
+  color: var(--amber);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  margin: 8px 0 8px;
+}
+.i-title { font-size: 34px; font-weight: 700; line-height: 1.2; max-height: 3.6em; overflow: hidden; }
+.i-time { display: flex; justify-content: space-between; color: var(--muted); font-size: 24px; margin-top: 14px; font-variant-numeric: tabular-nums; }
+.i-bar { height: 8px; border-radius: 4px; background: var(--panel-2); margin: 10px 0 18px; overflow: hidden; }
+.i-bar i { display: block; height: 100%; width: 0; background: var(--amber); border-radius: 4px; }
+.i-desc {
+  margin: 0 0 22px;
+  font-size: 23px;
+  line-height: 1.45;
+  color: #C3CBDD;
+  max-height: 10.15em;    /* 7 строк */
+  overflow: hidden;
+}
+.i-next-row { display: flex; font-size: 24px; padding: 7px 0; border-top: 1px solid var(--line); }
+.i-next-row b { width: 92px; flex-shrink: 0; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+.i-next-row span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.i-msg { color: var(--muted); font-size: 26px; margin: 24px 4px; }
+.b-prog { color: var(--text); font-size: 28px; margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.b-prog .t { color: var(--muted); margin-left: 12px; font-variant-numeric: tabular-nums; }
+
+/* ---------- Меню, окно ввода, подсказки в окнах ---------- */
+.m-msg { color: var(--muted); font-size: 26px; margin: -24px 0 28px; max-width: 900px; }
+.modal .box.m-box, .modal .box.pr-box { min-width: 820px; max-width: 1100px; }
+.m-row {
+  height: 72px;
+  line-height: 72px;
+  padding: 0 28px;
+  border-radius: 10px;
+  font-size: 30px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.m-row.focus { background: var(--amber); color: var(--ink); }
+#prInput {
+  width: 100%;
+  height: 80px;
+  padding: 0 24px;
+  border: 3px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+  font-size: 30px;
+  outline: none;
+}
+#prInput.focus, #prInput:focus { border-color: var(--amber); }
+#prInput::placeholder { color: #5D6886; }
+.pp-hint { text-align: center; margin: -24px auto 24px; max-width: 640px; font-size: 22px; }
+
+/* Служебные строки вверху колонки групп («> Поиск», «> Плейлисты»…) */
+.g-row.svc .g-name { color: var(--muted); }
+.g-row.svc.focus .g-name { color: var(--ink); }
+
+/* Приветствие */
+.setup-wrap .btn-row { margin-top: 8px; }
