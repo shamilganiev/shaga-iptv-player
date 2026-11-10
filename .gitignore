@@ -1,0 +1,7 @@
+# Built packages / Собранные пакеты
+*.zip
+*.ipk
+# BrighterScript build output / Результат сборки BrighterScript
+out/
+staging/
+.DS_Store
