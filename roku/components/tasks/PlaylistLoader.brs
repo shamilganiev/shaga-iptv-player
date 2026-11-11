@@ -69,7 +69,7 @@ end function
 
 sub writeCache(pid as string, url as string, parsed as object)
     t0 = CreateObject("roTimespan")
-    ok = WriteAsciiFile(cachePath(pid), FormatJson({ url: url, channels: parsed.channels, groups: parsed.groups, epgUrl: parsed.epgUrl }))
+    ok = WriteAsciiFile(cachePath(pid), FormatJson({ url: url, channels: parsed.channels, groups: parsed.groups, epgUrl: parsed.epgUrl }, &h0001))
     dbg("LOAD", "cache saved=" + ok.ToStr() + " in " + t0.TotalMilliseconds().ToStr() + " ms")
 end sub
 

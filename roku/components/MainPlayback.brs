@@ -309,8 +309,10 @@ function autoplayLast() as boolean
     end if
     i = groupCat(m.channels[k].gi)
     if i < 0 then return false
-    m.catList.jumpToItem = i
-    showCategory(i)
+    if i <> m.curCat or m.catList.itemFocused <> i then
+        m.catList.jumpToItem = i
+        showCategory(i)
+    end if
     posInCat = indexOfChannel(k)
     if posInCat >= 0 then m.chanList.jumpToItem = posInCat
     showPreviewInfo(k)

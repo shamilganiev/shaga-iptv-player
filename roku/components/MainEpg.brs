@@ -73,6 +73,7 @@ end sub
 
 sub onEpgStatus()
     m.epgStatus = m.epgSvc.status
+    if m.epgStatus.state = "loading" then m.epgAskedKey = ""   ' new partial data: ask again / новые данные — спросить снова
     if m.view = "settings" then buildSettingsRows(m.chanList.itemFocused)
     refreshInfoPanel()
 end sub
@@ -163,12 +164,14 @@ sub refreshInfoPanel()
     if m.progList.visible then return     ' the programme list is shown / открыт список передач
     key = epgKeyOf(ch)
     minute = CreateObject("roDateTime").AsSeconds() \ 60
-    if m.epgStatus.state = "ready" and (key <> m.epgAskedKey or minute <> m.epgAskedMinute) then
+    ' While loading, the service answers with what is parsed so far / Во время загрузки — уже разобранное
+    st = m.epgStatus.state
+    if (st = "ready" or st = "loading") and (key <> m.epgAskedKey or minute <> m.epgAskedMinute) then
         m.epgAskedKey = key
         m.epgAskedMinute = minute
         m.epgSvc.detailKey = key
     end if
-    if m.epgDetail <> invalid and m.epgDetail.key = key and m.epgStatus.state = "ready" then
+    if m.epgDetail <> invalid and m.epgDetail.key = key and (st = "ready" or (st = "loading" and m.epgDetail.items.Count() > 0)) then
         renderProgramme(m.epgDetail.items)
     else
         renderReason(key)
@@ -181,6 +184,7 @@ sub onEpgDetail()
     ix = infoTarget()
     if ix < 0 or m.channels = invalid then return
     if m.epgDetail.key <> epgKeyOf(m.channels[ix]) or m.progList.visible then return
+    if m.epgStatus.state = "loading" and m.epgDetail.items.Count() = 0 then return
     renderProgramme(m.epgDetail.items)
 end sub
 

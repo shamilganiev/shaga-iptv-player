@@ -8,7 +8,7 @@
         <!-- Deep link from main.brs: { contentId, mediaType } / Deep link из main.brs -->
         <field id="deepLink" type="assocarray" onChange="onDeepLink" />
         <!-- Set true to close the app (observed by main.brs) / true — закрыть приложение -->
-        <field id="exitApp" type="boolean" value="false" />
+        <field id="exitApp" type="boolean" value="false" alwaysNotify="true" />
     </interface>
 
     <script type="text/brightscript" uri="MainScene.brs" />

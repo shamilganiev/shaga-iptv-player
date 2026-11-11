@@ -202,7 +202,13 @@ var Browser = {
   // ---------- Программа канала (вправо из списка каналов) ----------
   openGuide: function (ch) {
     var list = EPG.all(ch);
-    if (!list.length) { Toast.show(EPG.state === 'ready' ? t('epgNone') : t('epgLoading')); return; }
+    if (!list.length) {
+      Log.info('Программа канала пуста: EPG ' + EPG.state);
+      var why = EPG.state === 'ready' ? t('epgNone') : EPG.state === 'nourl' ? t('epgNoSource')
+        : EPG.state === 'error' ? t('epgError') : t('epgLoading');
+      Confirm.open(ch.name, [{ label: t('ok') }], null, why);
+      return;
+    }
     this.progCh = ch;
     var now = Date.now(), at = 0;
     for (var i = 0; i < list.length; i++) { if (list[i].s <= now) at = i; else break; }
@@ -234,12 +240,18 @@ var Browser = {
     $('progDesc').textContent = p ? (EPG.hm(p.s) + ' – ' + EPG.hm(p.e) + (p.d ? '   ' + p.d : '')) : '';
   },
 
-  // OK на передаче: идёт сейчас — эфир; прошла — архив (если есть); будущая — описание
+  // OK на передаче: идёт сейчас — эфир; прошла — архив (если есть); будущая — описание.
+  // Из списка передач видео включается позади списка; повторный OK на том, что уже
+  // играет, — полный экран (как в Roku, 1.3.2).
   actOnProgramme: function (p) {
     var ch = this.progCh;
     if (!p || !ch) return;
-    var now = Date.now();
-    if (p.s <= now && now < p.e) { this.playLive(ch); return; }
+    var now = Date.now(), cur = p.s <= now && now < p.e;
+    if (Player.isCurrent(ch) && Player.state !== 'error' && Player.state !== 'idle') {
+      var same = Player.arch ? Player.arch.s === Math.floor(p.s / 1000) : cur;
+      if (same) { Log.info('Передача уже играет — полный экран'); App.show('player'); return; }
+    }
+    if (cur) { this.playLive(ch); return; }
     if (p.e <= now) { this.playFromArchive(ch, p); return; }
     this.showDescription(p);
   },
@@ -252,23 +264,37 @@ var Browser = {
     return { list: all, idx: all.indexOf(ch), gid: '__all' };
   },
 
+  // Эфир из списка передач: видео позади списка, список остаётся
   playLive: function (ch) {
-    var w = this.listWith(ch);
+    var self = this, w = this.listWith(ch);
     if (w.idx < 0) return;
-    App.playFrom(w.list, w.idx, w.gid);
+    App.guardPlay(ch, function () { Player.play(w.list, w.idx, w.gid); self.afterPlay(); });
+  },
+
+  afterPlay: function () {
+    this.chans.render();
+    this.progs.render();
+    this.drawHeads();
   },
 
   playFromArchive: function (ch, p) {
-    var pl = Playlists.byId(App.plId), info = Catchup.info(ch, pl && pl.arch);
+    var self = this, pl = Playlists.byId(App.plId), info = Catchup.info(ch, pl && pl.arch);
     var now = Math.floor(Date.now() / 1000);
+    if (!info) {
+      // В плейлисте нет атрибутов архива, а в настройке «Из плейлиста»
+      Log.info('Архив: для плейлиста не настроен');
+      Confirm.open(p.t, [{ label: t('ok') }], null, t('archNotSet'));
+      return;
+    }
     if (!Catchup.covers(info, Math.floor(p.s / 1000), now)) {
+      Log.info('Архив: передача старше глубины ' + info.d + ' дн.');
       Confirm.open(p.t, [{ label: t('ok') }], null, t('archUnavailable'));
       return;
     }
     var w = this.listWith(ch);
     if (w.idx < 0) return;
     App.guardPlay(ch, function () {
-      if (Player.playArchive(w.list, w.idx, w.gid, p, 0)) App.show('player');
+      if (Player.playArchive(w.list, w.idx, w.gid, p, 0)) self.afterPlay();
     });
   },
 

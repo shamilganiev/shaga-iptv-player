@@ -50,6 +50,7 @@ sub closeDialog()
         m.dlgNode.unobserveField("wasClosed")
         m.dlgNode.close = true
     end if
+    if m.dlgKind <> "" then dbg("UI", "dialog " + m.dlgKind + " closed")
     m.dlgNode = invalid
     m.dlgKind = ""
     m.dlgCtx = invalid
@@ -57,9 +58,12 @@ sub closeDialog()
     restoreFocus()
 end sub
 
-' Back on a dialog / «Назад» в диалоге
+' Back on a dialog. wasClosed is an event field: its value is not "true" when read,
+' so it is not checked (1.3.0 left the dialog flag set and the keys stopped working).
+' «Назад» в диалоге. wasClosed — поле-событие, его значение при чтении не true,
+' поэтому не проверяем (в 1.3.0 флаг окна оставался, и кнопки переставали работать).
 sub onDialogClosed()
-    if m.dlgNode = invalid or m.dlgNode.wasClosed <> true then return
+    if m.dlgNode = invalid then return
     kind = m.dlgKind
     m.dlgNode.unobserveField("buttonSelected")
     m.dlgNode.unobserveField("wasClosed")
@@ -109,7 +113,7 @@ sub onDialogButton()
     else if kind = "exit" then
         if b = 0 then
             closeDialog()
-            m.top.exitApp = true
+            requestExit()
         else
             closeDialog()
         end if
@@ -151,6 +155,14 @@ function keyboardText(dlg as object) as string
 end function
 
 ' ---------- exit / выход ----------
+
+' Close the app: both the scene field and the global field are set (see main.brs)
+' Закрыть приложение: ставим и поле сцены, и глобальное поле (см. main.brs)
+sub requestExit()
+    dbg("APP", "exit by the user")
+    m.top.exitApp = true
+    m.global.exitApp = true
+end sub
 
 sub openExitDialog()
     showDialog(newMessageDialog(m.S.exitTitle, [" "], [m.S.exit, m.S.stay]), "exit", invalid)

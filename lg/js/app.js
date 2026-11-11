@@ -21,7 +21,7 @@ function isInput(el) {
 }
 
 var App = {
-  version: '1.3.0',
+  version: '1.3.2',
   PRIVACY_URL: 'https://shamilganiev.github.io/shaga-iptv-player/privacy.html',
   SUPPORT_URL: 'https://github.com/shamilganiev/shaga-iptv-player/issues',
   MAX_FAV: 200,
@@ -376,7 +376,13 @@ var App = {
         if (list.length) this.search = { q: q, list: list };
       }
     }
-    if (this.channels.length) this.scheduleEpg();
+    if (this.channels.length) {
+      // Сохранённая программа — сразу после старта картинки: чтение копии (4 с на ТВ)
+      // в 1.3.1 шло одновременно с запуском канала и тормозило его (7 с вместо 3)
+      var meta = this.meta;
+      Player.onceStarted(function () { EPG.loadCached(meta); });
+      this.scheduleEpg();
+    }
   },
 
   // EPG качается после старта видео (как и обновление плейлиста), чтобы не тормозить канал
@@ -625,6 +631,20 @@ var App = {
   },
 
   // ---------- Пульт ----------
+  // Журнал нажатий, как в Roku: «KEY right browser/channels». Цифры не пишем (PIN-код).
+  KEY_NAMES: { 37: 'left', 38: 'up', 39: 'right', 40: 'down', 13: 'OK', 461: 'back', 33: 'chup', 34: 'chdn',
+               403: 'red', 404: 'green', 405: 'yellow', 406: 'blue', 415: 'play', 19: 'pause', 413: 'stop',
+               412: 'rew', 417: 'ff' },
+  logKey: function (code, inInput) {
+    var name = this.KEY_NAMES[code];
+    if (!name || inInput) return;
+    var where = PinPad.isOpen ? 'pin' : Confirm.isOpen ? 'confirm' : Menu.isOpen ? 'menu' : Prompt.isOpen ? 'prompt'
+      : this.screen === Browser ? 'browser/' + Browser.panel
+      : this.screen === Settings ? 'settings/' + Settings.mode
+      : this.screen === Player ? 'player' + (Player.arch ? '/archive' : '') : 'setup';
+    Log.info('KEY ' + name + ' ' + where);
+  },
+
   onKey: function (e) {
     var code = e.keyCode;
     var inInput = isInput(e.target);
@@ -635,6 +655,7 @@ var App = {
       else if (code === 66) code = K.BLUE;
     }
 
+    this.logKey(code, inInput);
     if (PinPad.isOpen) { if (PinPad.onKey(code)) e.preventDefault(); return; }
     if (Confirm.isOpen) { if (Confirm.onKey(code)) e.preventDefault(); return; }
     if (Menu.isOpen) { if (Menu.onKey(code)) e.preventDefault(); return; }

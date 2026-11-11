@@ -5,8 +5,15 @@
 // и храним только нужное:
 //  - передачи каналов из плейлиста;
 //  - в окне «сутки назад — сутки вперёд» (прошлые сутки — для архива);
-//  - описания — только у передач ближайших 4 часов.
+//  - описания — у всех передач окна, до 300 символов (с 1.3.2).
 // Каналы сопоставляются по tvg-id, а если он не совпал — по названию.
+//
+// 1.3.1: saved copy in IndexedDB. A copy younger than 24 h is shown at once; if it is older
+// than 12 h a fresh file is downloaded in the background and the old programme stays on screen.
+// The first load without a copy publishes the programme every 20 MB while parsing.
+// 1.3.1: сохранённая копия в IndexedDB. Копия моложе 24 ч показывается сразу; если она старше
+// 12 ч — свежий файл качается в фоне, старая программа остаётся на экране.
+// Первая загрузка без копии показывает программу каждые 20 МБ по ходу разбора.
 var EPG = {
   state: 'none',      // none | nourl | loading | ready | error
   url: '',
@@ -18,8 +25,9 @@ var EPG = {
   BACK_MS: 24 * 3600 * 1000,   // вчера — для архива
   FWD_MS: 24 * 3600 * 1000,
   DESC_MS: 4 * 3600 * 1000,
-  REFRESH_MS: 6 * 3600 * 1000,
-  TIMEOUT_MS: 180000,
+  REFRESH_MS: 12 * 3600 * 1000,
+  MAX_AGE_MS: 24 * 3600 * 1000,
+  TIMEOUT_MS: 30 * 60000,   // 1.3.2: было 180 с — файл 250+ МБ на загруженном ТВ не успевал
   onUpdate: null,     // вызывается, когда программа загрузилась
 
   // Ключ канала: tvg-id, а без него — нормализованное название
@@ -38,9 +46,44 @@ var EPG = {
     return '';
   },
 
+  // Saved copy: shown as soon as the playlist is on screen (before the video starts)
+  // Сохранённая копия: показываем сразу, как только плейлист на экране (до старта видео)
+  loadCached: function (meta) {
+    var self = this, url = this.pickUrl(meta);
+    if (!url || (url === this.url && this.state === 'ready')) return Promise.resolve(false);
+    if (url !== this.url) { this.byKey = {}; this.state = 'none'; this.url = url; this.loadedAt = 0; }
+    var t0 = Date.now();
+    var p = this.cacheP = Cache.getKey('epg').then(function (c) {
+      if (self.url !== url || self.state === 'ready') return false;
+      if (!c || c.url !== url || !c.byKey || c.win !== 24) return false;
+      var age = Date.now() - c.loadedAt;
+      if (age >= self.MAX_AGE_MS) { Log.info('EPG: сохранённая копия старше 24 ч, не используется'); return false; }
+      self.byKey = c.byKey;
+      self.stats = c.stats;
+      self.loadedAt = c.loadedAt;
+      self.state = 'ready';
+      Log.info('EPG: сохранённая копия за ' + (Date.now() - t0) + ' мс, ей ' + Math.round(age / 60000) + ' мин; каналов с программой ' +
+        (c.stats ? c.stats.channels : '?'));
+      self.notify();
+      return true;
+    }).then(function (ok) { self.cacheP = null; return ok; }, function () { self.cacheP = null; return false; });
+    return p;
+  },
+
   // force — загрузить, даже если свежая программа уже есть
   load: function (meta, channels, force) {
     var self = this, url = this.pickUrl(meta);
+    // Сначала дождаться чтения сохранённой копии — может, качать и не нужно
+    if (this.cacheP) { this.cacheP.then(function () { self.load(meta, channels, force); }); return; }
+    if (url && !force && url === this.url && this.state === 'ready' && !this.loading) {
+      var age = Date.now() - this.loadedAt;
+      if (age < this.REFRESH_MS) {
+        // Свежая копия уже на экране — следующее обновление по расписанию
+        this.scheduleRefresh(meta, channels, this.REFRESH_MS - age);
+        return;
+      }
+      Log.info('EPG: копии ' + Math.round(age / 60000) + ' мин — обновление в фоне');
+    }
     if (!url) {
       this.state = 'nourl';
       Log.info('EPG: в плейлисте нет ссылки на программу передач (url-tvg = «' +
@@ -48,10 +91,7 @@ var EPG = {
       this.notify();
       return;
     }
-    if (!force && url === this.url) {
-      if (this.loading) return;
-      if (this.state === 'ready' && Date.now() - this.loadedAt < this.REFRESH_MS) return;
-    }
+    if (!force && url === this.url && this.loading) return;
     if (this.aborter) { try { this.aborter.abort(); } catch (e) {} }
 
     var seq = this.seq = (this.seq || 0) + 1;   // ответ устаревшей загрузки игнорируется
@@ -60,7 +100,14 @@ var EPG = {
     if (this.state !== 'ready') this.state = 'loading';   // старая программа остаётся на экране
     this.loading = true;
     this.notify();
-    this.fetchParse(url, channels).then(function (res) {
+    var hadOld = this.state === 'ready';
+    // Первая загрузка без старой программы — показываем разобранное по ходу (каждые 20 МБ)
+    var partial = hadOld ? null : function (byKey) {
+      if (seq !== self.seq || self.state === 'ready') return;
+      self.byKey = byKey;
+      self.notify();
+    };
+    this.fetchParse(url, channels, null, partial).then(function (res) {
       if (seq !== self.seq) return;
       self.byKey = res.byKey;
       self.stats = res.stats;
@@ -68,29 +115,44 @@ var EPG = {
       self.loading = false;
       self.loadedAt = Date.now();
       self.notify();
-      self.scheduleRefresh(meta, channels);
+      self.saveCopy();
+      self.scheduleRefresh(meta, channels, self.REFRESH_MS);
     }).catch(function (err) {
       if (seq !== self.seq) return;
       self.loading = false;
       var msg = err && err.name === 'AbortError' ? 'нет ответа за ' + self.TIMEOUT_MS / 1000 + ' с'
         : (err && err.message ? err.message : String(err));
-      Log.error('EPG: ' + msg);
-      if (self.state !== 'ready') self.state = 'error';
+      if (self.state === 'ready') {
+        Log.error('EPG: обновление не удалось (' + msg + '), старая программа остаётся, повтор через 30 мин');
+        self.scheduleRefresh(meta, channels, 30 * 60000);
+      } else {
+        Log.error('EPG: ' + msg);
+        self.byKey = {};
+        self.state = 'error';
+      }
       self.notify();
     });
   },
 
-  scheduleRefresh: function (meta, channels) {
+  saveCopy: function () {
+    var t0 = Date.now(), url = this.url;
+    Cache.setKey('epg', { win: 24, url: url, loadedAt: this.loadedAt, byKey: this.byKey, stats: this.stats }).then(function () {
+      Log.info('EPG: копия сохранена за ' + (Date.now() - t0) + ' мс');
+    });
+  },
+
+  scheduleRefresh: function (meta, channels, ms) {
     var self = this;
     clearTimeout(this.refreshTimer);
-    this.refreshTimer = setTimeout(function () { self.load(meta, channels, true); }, this.REFRESH_MS);
+    this.refreshTimer = setTimeout(function () { self.load(meta, channels, true); }, ms);
   },
 
   notify: function () { if (this.onUpdate) this.onUpdate(); },
 
   // opts.gz — распаковывать gzip, opts.enc — кодировка. Если по первым байтам видно,
   // что угадали неверно, загрузка перезапускается с правильными настройками.
-  fetchParse: function (url, channels, opts) {
+  // partial(byKey) — показать разобранное по ходу загрузки (первая загрузка)
+  fetchParse: function (url, channels, opts, partial) {
     opts = opts || {};
     var self = this, t0 = Date.now();
     var tz = -new Date().getTimezoneOffset() / 60;
@@ -147,10 +209,9 @@ var EPG = {
       if (e <= from || s >= to) { st.outWindow++; return; }
       var tm = /<title[^>]*>([\s\S]*?)<\/title>/.exec(body);
       var p = { s: s, e: e, t: tm ? decode(tm[1]) : '' };
-      if (s < descTo && e > now - 3600 * 1000) {
-        var dm = /<desc[^>]*>([\s\S]*?)<\/desc>/.exec(body);
-        if (dm) p.d = decode(dm[1]).slice(0, 600);
-      }
+      // 1.3.2: описания у всех передач окна, до 300 символов
+      var dm = /<desc[^>]*>([\s\S]*?)<\/desc>/.exec(body);
+      if (dm) { var dd = decode(dm[1]); p.d = dd.length > 300 ? own(dd.slice(0, 297)) + '...' : dd; }
       (byKey[k] || (byKey[k] = [])).push(p);
       st.kept++;
     }
@@ -221,6 +282,7 @@ var EPG = {
               st.nextLog += 20971520;
               Log.info('EPG: … ' + Math.round(st.bytes / 1048576) + ' МБ за ' + (Date.now() - t0) + ' мс; каналов ' +
                 st.epgChannels + ', передач ' + st.progs + ', сохранено ' + st.kept);
+              if (partial) partial(byKey);
             }
             pump();
           }).catch(reject);
@@ -231,7 +293,7 @@ var EPG = {
       clearTimeout(timer);
       if (restart) {
         restart.retry = restart.gz ? 'gzip' : restart.enc;
-        return self.fetchParse(url, channels, restart);
+        return self.fetchParse(url, channels, restart, partial);
       }
       var keys = Object.keys(byKey);
       keys.forEach(function (k) { byKey[k].sort(function (a, b) { return a.s - b.s; }); });

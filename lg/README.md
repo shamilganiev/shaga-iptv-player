@@ -3,8 +3,8 @@
 Универсальный плеер M3U-плейлистов. Сам каналов не содержит.
 
 ## Установка на телевизор
-    ares-package .              # из папки проекта; появится com.shaga.player_1.3.0_all.ipk
-    ares-install com.shaga.player_1.3.0_all.ipk
+    ares-package .              # из папки проекта; появится com.shaga.player_1.3.2_all.ipk
+    ares-install com.shaga.player_1.3.2_all.ipk
     ares-launch com.shaga.player
 
 ## Отладка

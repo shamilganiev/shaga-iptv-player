@@ -2,16 +2,18 @@
 ' ShaGa IPTV Player — бесплатный плеер для собственных плейлистов M3U/M3U8
 '
 ' EpgService: long-running Task with its own message port.
-'  - cmd "load": read the saved copy (cachefs:) if fresh, else download the XMLTV
-'    in chunks (HTTP Range, or via a file if the server does not support it) and parse.
-'  - every 30 s: publish nowMap (programme on air per channel) when the minute changes;
-'    reload every 6 hours.
-'  - detailKey: answer with the current + next programmes of one channel.
+'  - cmd "load": show the saved copy (cachefs:) at once if it is younger than 24 h;
+'    if it is older than the refresh period (12 h), download a fresh file in the
+'    background while the old programme stays on screen.
+'  - first load without a copy: the programme is published every 20 MB while parsing.
+'  - requests from the scene (detailKey, listKey) are answered between chunks too.
+'  - every 30 s: publish nowMap (programme on air per channel) when the minute changes.
 ' EpgService: долгоживущая задача со своим портом сообщений.
-'  - "load": берём сохранённую копию (cachefs:), если свежая, иначе качаем XMLTV
-'    кусками (HTTP Range или через файл, если сервер не умеет) и разбираем.
-'  - раз в 30 с: при смене минуты публикуем nowMap; обновление раз в 6 часов.
-'  - detailKey: отвечаем текущей и следующими передачами одного канала.
+'  - "load": сохранённая копия (cachefs:) моложе 24 ч показывается сразу; если она старше
+'    срока обновления (12 ч) — свежий файл качается в фоне, старая программа остаётся.
+'  - первая загрузка без копии: программа публикуется каждые 20 МБ по ходу разбора.
+'  - запросы сцены (detailKey, listKey) обслуживаются и между кусками файла.
+'  - раз в 30 с: при смене минуты публикуем nowMap.
 '
 ' gzip without Content-Encoding is NOT supported on Roku (no unpacking in BrightScript).
 ' gzip без Content-Encoding на Roku НЕ поддерживается (в BrightScript нет распаковки).
@@ -30,30 +32,60 @@ sub epgLoop()
     m.progs = {}
     m.keyToFile = {}
     m.loadedAt = 0
+    m.nextLoad = 0          ' when to download again (0 = not planned) / когда качать снова
+    m.loading = false
+    m.hadOld = false        ' a refresh with the old programme on screen / обновление поверх старой
+    m.pendingCmd = invalid  ' cmd that came during a download / cmd, пришедший во время загрузки
+    m.curUrl = ""
+    m.fileIdList = []
+    m.fileNames = {}
     m.lastMinute = -1
     m.cfg = getAppConfig()
     setStatus("none", "")
     while true
         msg = wait(30000, m.port)
-        if type(msg) = "roSGNodeEvent" then
-            f = msg.getField()
-            if f = "cmd" then
-                handleCmd(msg.getData())
-            else if f = "detailKey" then
-                answerDetail(msg.getData())
-            else if f = "listKey" then
-                answerList(msg.getData())
-            end if
+        if type(msg) = "roSGNodeEvent" then handleEvent(msg)
+        if m.pendingCmd <> invalid then
+            c = m.pendingCmd
+            m.pendingCmd = invalid
+            handleCmd(c)
         end if
-        if m.loadedAt > 0 then
-            now = CreateObject("roDateTime").AsSeconds()
-            if now - m.loadedAt >= m.cfg.epgRefreshSec then
-                dbg("EPG", "refresh after " + Int(m.cfg.epgRefreshSec / 3600).ToStr() + " h")
-                loadFromNetwork()
-            else if now \ 60 <> m.lastMinute then
-                publishNow()
-            end if
+        now = CreateObject("roDateTime").AsSeconds()
+        if m.nextLoad > 0 and now >= m.nextLoad then
+            dbg("EPG", "refresh of the TV guide in the background")
+            loadFromNetwork()
+        else if m.loadedAt > 0 and now \ 60 <> m.lastMinute then
+            publishNow()
         end if
+    end while
+end sub
+
+sub handleEvent(msg as object)
+    f = msg.getField()
+    if f = "cmd" then
+        if m.loading then
+            c = msg.getData()
+            ' Manual refresh of the same link while it is already downloading: nothing to do
+            ' Ручное обновление той же ссылки, пока она уже качается, — ничего не делаем
+            if c <> invalid and c.url = m.url and c.force = true then return
+            m.pendingCmd = c
+        else
+            handleCmd(msg.getData())
+        end if
+    else if f = "detailKey" then
+        answerDetail(msg.getData())
+    else if f = "listKey" then
+        answerList(msg.getData())
+    end if
+end sub
+
+' Between chunks: answer the scene without waiting for the whole file
+' Между кусками: отвечаем сцене, не дожидаясь всего файла
+sub serviceRequests()
+    while true
+        msg = m.port.GetMessage()
+        if msg = invalid then return
+        if type(msg) = "roSGNodeEvent" then handleEvent(msg)
     end while
 end sub
 
@@ -66,17 +98,56 @@ sub handleCmd(c as dynamic)
     if m.url = "" then
         dbg("EPG", "no TV guide link in the playlist")
         clearData()
+        m.curUrl = ""
         setStatus("nourl", "")
+        return
+    end if
+    ' Another link: the old programme does not belong to it / Другая ссылка — старая программа не подходит
+    if m.url <> m.curUrl then clearData()
+    m.curUrl = m.url
+    if c.force <> true and m.loadedAt > 0 then
+        ' Same link, programme already in memory (the playlist was refreshed): only re-map
+        ' Та же ссылка, программа уже в памяти (обновился плейлист): только пересопоставить
+        remap()
+        dbg("EPG", "re-mapped with the playlist; channels with guide " + countWithGuide().ToStr() + " of " + m.keys.Count().ToStr())
+        m.lastMinute = -1
+        publishNow()
+        setStatus("ready", "")
         return
     end if
     if c.force <> true and loadFromCache() then return
     loadFromNetwork()
 end sub
 
+' Playlist keys -> file channels using the ids/names kept from the last load
+' Ключи плейлиста -> каналы файла по id/названиям, сохранённым от последней загрузки
+sub remap()
+    epgParseBegin(m.keys)
+    for each fid in m.fileIdList
+        m.ep.fileIds[fid] = true
+    end for
+    m.ep.fileNames = m.fileNames
+    epgBuildKeyMap()
+    m.keyToFile = m.ep.keyToFile
+    m.ep = invalid
+end sub
+
+' A command for another playlist came during the download: stop it
+' Во время загрузки пришла команда для другого плейлиста — прекращаем
+function loadAborted() as boolean
+    c = m.pendingCmd
+    if c = invalid or c.url = m.url then return false
+    dbg("EPG", "download stopped: another playlist")
+    m.loading = false
+    if CreateObject("roFileSystem").Exists("cachefs:/epg_download.xml") then DeleteFile("cachefs:/epg_download.xml")
+    return true
+end function
+
 sub clearData()
     m.progs = {}
     m.keyToFile = {}
     m.loadedAt = 0
+    m.nextLoad = 0
     m.top.nowMap = {}
 end sub
 
@@ -105,6 +176,17 @@ function cacheFile() as string
     return "cachefs:/epg.json"
 end function
 
+' FormatJson with &h0001: Cyrillic is written as is; by default every letter became \uXXXX
+' (6 bytes instead of 2), the 1.3.1 copy was about 3 times bigger than needed.
+' FormatJson с &h0001: кириллица как есть; по умолчанию каждая буква становилась \uXXXX.
+' Compact copy (v2): times are offsets from "base" (start = s - base, length = e - s),
+' descriptions are kept only for programmes around now (−3 h … +12 h). The old copy is
+' deleted before writing: in 1.3.1 a full copy did not fit into cachefs: and Roku cleared
+' the whole cachefs: of the app (the playlist copy too).
+' Компактная копия (v2): время — смещения от base (начало = s − base, длина = e − s),
+' описания — только у передач около «сейчас» (−3 ч … +12 ч). Старая копия удаляется перед
+' записью: в 1.3.1 полная копия не помещалась в cachefs:, и Roku очищал весь cachefs:
+' приложения (вместе с копией плейлиста).
 function loadFromCache() as boolean
     t0 = CreateObject("roTimespan")
     if not CreateObject("roFileSystem").Exists(cacheFile()) then return false
@@ -112,23 +194,39 @@ function loadFromCache() as boolean
     if text = "" then return false
     data = ParseJson(text)
     text = ""
-    if data = invalid or data.url <> m.url or data.progs = invalid or data.win <> 24 then return false
+    if data = invalid or data.url <> m.url or data.progs = invalid or data.v <> 2 then return false
     now = CreateObject("roDateTime").AsSeconds()
-    if now - data.loadedAt >= m.cfg.epgRefreshSec then
-        dbg("EPG", "saved copy is older than the refresh period")
+    age = now - data.loadedAt
+    if age >= m.cfg.epgMaxAgeSec then
+        dbg("EPG", "saved copy is older than " + Int(m.cfg.epgMaxAgeSec / 3600).ToStr() + " h, not used")
         return false
     end if
-    m.progs = data.progs
-    m.loadedAt = data.loadedAt
-    ' Re-map with the current playlist / Пересопоставляем с текущим плейлистом
-    epgParseBegin(m.keys)
-    for each fid in data.ids
-        m.ep.fileIds[fid] = true
+    ' Expand offsets back to seconds / Смещения обратно в секунды
+    base = data.base
+    progs = {}
+    for each fid in data.progs
+        c = data.progs[fid]
+        pr = { s: [], e: [], t: c.t, d: c.d }
+        n = c.s.Count()
+        for i = 0 to n - 1
+            st = base + c.s[i]
+            pr.s.push(st)
+            pr.e.push(st + c.l[i])
+        end for
+        progs[fid] = pr
     end for
-    m.ep.fileNames = data.names
-    epgBuildKeyMap()
-    m.keyToFile = m.ep.keyToFile
-    m.ep = invalid
+    data.progs = invalid
+    m.progs = progs
+    m.loadedAt = data.loadedAt
+    m.fileIdList = data.ids
+    m.fileNames = data.names
+    ' Older than the refresh period: shown now, fresh file in the background (next loop pass)
+    ' Старше срока обновления: показываем сейчас, свежий файл — в фоне (следующий проход цикла)
+    m.nextLoad = m.loadedAt + m.cfg.epgRefreshSec
+    if m.nextLoad <= now then m.nextLoad = now + 5
+    dbg("EPG", "saved copy is " + Int(age / 60).ToStr() + " min old; next download in " + Int((m.nextLoad - now) / 60).ToStr() + " min")
+    ' Re-map with the current playlist / Пересопоставляем с текущим плейлистом
+    remap()
     dbg("EPG", "saved copy read in " + t0.TotalMilliseconds().ToStr() + " ms; channels with guide " + countWithGuide().ToStr() + " of " + m.keys.Count().ToStr())
     m.lastMinute = -1
     publishNow()
@@ -138,19 +236,55 @@ end function
 
 sub saveCache(ids as object, names as object)
     t0 = CreateObject("roTimespan")
+    path = cacheFile()
+    fs = CreateObject("roFileSystem")
+    ' Free the space of the old copy first / Сначала освобождаем место старой копии
+    if fs.Exists(path) then DeleteFile(path)
     idList = []
     for each fid in ids
         idList.push(fid)
     end for
-    ok = WriteAsciiFile(cacheFile(), FormatJson({ win: 24, url: m.url, loadedAt: m.loadedAt, progs: m.progs, ids: idList, names: names }))
-    dbg("EPG", "saved copy written=" + ok.ToStr() + " in " + t0.TotalMilliseconds().ToStr() + " ms")
+    now = CreateObject("roDateTime").AsSeconds()
+    base = now - 26 * 3600
+    dLo = now - 3 * 3600
+    dHi = now + 12 * 3600
+    progs = {}
+    for each fid in m.progs
+        pr = m.progs[fid]
+        c = { s: [], l: [], t: pr.t, d: [] }
+        n = pr.s.Count()
+        for i = 0 to n - 1
+            c.s.push(pr.s[i] - base)
+            c.l.push(pr.e[i] - pr.s[i])
+            if pr.e[i] > dLo and pr.s[i] < dHi then c.d.push(pr.d[i]) else c.d.push("")
+        end for
+        progs[fid] = c
+    end for
+    text = FormatJson({ v: 2, url: m.url, loadedAt: m.loadedAt, base: base, progs: progs, ids: idList, names: names }, &h0001)
+    progs = invalid
+    chars = text.Len()
+    ok = WriteAsciiFile(path, text)
+    text = ""
+    size = 0
+    st = fs.Stat(path)
+    if st <> invalid and st.size <> invalid then size = st.size
+    if not ok and fs.Exists(path) then DeleteFile(path)
+    dbg("EPG", "saved copy written=" + ok.ToStr() + ", " + chars.ToStr() + " chars, " + Int(size / 1024).ToStr() + " KB on disk, in " + t0.TotalMilliseconds().ToStr() + " ms")
 end sub
 
 ' ---------- download + parse / загрузка и разбор ----------
 
 sub loadFromNetwork()
-    clearData()
-    setStatus("loading", "")
+    ' The old programme stays on screen until the new one is ready
+    ' Старая программа остаётся на экране, пока не готова новая
+    m.hadOld = m.loadedAt > 0
+    m.nextLoad = 0
+    if not m.hadOld then
+        clearData()
+        setStatus("loading", "")
+    end if
+    m.loading = true
+    m.partialAt = 0
     t0 = CreateObject("roTimespan")
     dt = CreateObject("roDateTime")
     dt.ToLocalTime()
@@ -186,6 +320,7 @@ sub loadFromNetwork()
     end if
     if not ok then
         m.ep = invalid
+        m.loading = false
         return
     end if
     epgParseFinish()
@@ -203,11 +338,29 @@ sub loadFromNetwork()
     ids = ep.fileIds
     names = ep.fileNames
     m.ep = invalid
+    m.fileIdList = []
+    for each fid in ids
+        m.fileIdList.push(fid)
+    end for
+    m.fileNames = names
     saveCache(ids, names)
     logMemory()
+    m.loading = false
+    m.nextLoad = m.loadedAt + m.cfg.epgRefreshSec
     m.lastMinute = -1
     publishNow()
     setStatus("ready", "")
+end sub
+
+' First load (no old programme): publish what is parsed so far, every 20 MB
+' Первая загрузка (старой программы нет): публикуем уже разобранное каждые 20 МБ
+sub publishPartial()
+    if m.hadOld or m.ep = invalid or not m.ep.channelsDone then return
+    m.progs = m.ep.progs
+    m.keyToFile = m.ep.keyToFile
+    m.lastMinute = -1
+    publishNow()
+    setStatus("loading", "")
 end sub
 
 ' App memory use after the guide is loaded / Память приложения после загрузки программы
@@ -219,8 +372,16 @@ sub logMemory()
 end sub
 
 sub failLoad(why as string)
+    m.loading = false
+    if m.hadOld then
+        ' Keep the old programme, try again in 30 minutes / Оставляем старую, повтор через 30 минут
+        dbg("ERR", "EPG refresh failed: " + why + "; the old programme stays, retry in 30 min")
+        m.nextLoad = CreateObject("roDateTime").AsSeconds() + 1800
+        setStatus("ready", "")
+        return
+    end if
     dbg("ERR", "EPG not loaded: " + why)
-    m.loadedAt = 0
+    clearData()
     setStatus("error", why)
 end sub
 
@@ -312,8 +473,11 @@ function readByRanges(size as integer, chunkSize as integer, t0 as object) as bo
         text = ""
         if offset >= nextLog then
             logProgress(offset, t0)
+            publishPartial()
             nextLog = nextLog + 20 * 1048576
         end if
+        serviceRequests()
+        if loadAborted() then return false
     end while
     return true
 end function
@@ -363,8 +527,11 @@ function readViaFile(size as integer, chunkSize as integer, t0 as object) as boo
         text = ""
         if offset >= nextLog then
             logProgress(offset, t0)
+            publishPartial()
             nextLog = nextLog + 20 * 1048576
         end if
+        serviceRequests()
+        if loadAborted() then return false
     end while
     DeleteFile(path)
     return true

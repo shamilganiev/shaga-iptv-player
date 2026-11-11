@@ -16,7 +16,10 @@ sub Main(args as dynamic)
     ' Global fields must exist BEFORE CreateScene: components subscribe to them in init().
     ' Глобальные поля создаём ДО CreateScene: компоненты подписываются на них в init().
     g = screen.getGlobalNode()
-    g.addFields({ memWarning: 0 })
+    g.addFields({ memWarning: 0, exitApp: false })
+    ' Exit request: through the global node too (in 1.3.1 the scene field did not reach this loop)
+    ' Запрос выхода — ещё и через глобальный узел (в 1.3.1 поле сцены не доходило до этого цикла)
+    g.observeField("exitApp", m.port)
 
     ' Memory monitor (required by certification since Oct 1, 2026)
     ' Монитор памяти (обязателен для сертификации с 1 окт. 2026)

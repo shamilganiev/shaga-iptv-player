@@ -4,11 +4,11 @@
 ' XMLTV parsing helpers. The file is fed in pieces (chunks); only complete
 ' <channel> and <programme> elements are parsed, the tail waits for the next chunk.
 ' Kept: programmes of playlist channels inside the window "−24 h … +24 h";
-' descriptions only for programmes starting within the next 4 hours (max 600 chars).
+' descriptions for all of them, up to 300 characters (1.3.2; before: next 4 hours only).
 ' Помощники разбора XMLTV. Файл подаётся кусками; разбираются только законченные
 ' <channel> и <programme>, хвост ждёт следующего куска.
 ' Храним: передачи каналов плейлиста в окне «−24 ч … +24 ч»;
-' описания — только у передач, начинающихся в ближайшие 4 часа (до 600 символов).
+' описания — у всех, до 300 символов (1.3.2; раньше — только ближайшие 4 часа).
 '
 ' State in m.ep (one parse) / Состояние в m.ep (один разбор):
 '   carry, channelsDone, fileIds{}, fileNames{normName: id}, wanted{fileId}, keyToFile{},
@@ -147,11 +147,9 @@ sub epgParseProgramme(piece as string)
         return
     end if
     title = epgTag(piece, "title", te)
-    desc = ""
-    if s < ep.descUntil then
-        desc = epgTag(piece, "desc", te)
-        if desc.Len() > 600 then desc = desc.Left(597) + "..."
-    end if
+    desc = epgTag(piece, "desc", te)
+    if desc.Len() > 300 then desc = desc.Left(297) + "..."
+
     pr = ep.progs[cid]
     if pr = invalid then
         pr = { s: [], e: [], t: [], d: [] }

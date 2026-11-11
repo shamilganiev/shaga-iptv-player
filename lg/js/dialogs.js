@@ -33,6 +33,7 @@ var Confirm = {
   open: function (title, buttons, onCancel, msg) {
     var self = this;
     this.isOpen = true;
+    Log.info('UI окно «' + title + '»' + (msg ? ': ' + String(msg).slice(0, 80) : ''));
     this.btns = buttons;
     this.onCancel = onCancel || null;
     this.idx = 0;
@@ -201,6 +202,7 @@ var Menu = {
     opts = opts || {};
     var self = this;
     this.isOpen = true;
+    Log.info('UI меню «' + title + '»');
     this.items = items;
     this.onCancel = opts.onCancel || null;
     this.idx = opts.focus != null ? opts.focus : 0;
@@ -233,6 +235,7 @@ var Menu = {
 
   choose: function () {
     var it = this.items[this.idx];
+    if (it) Log.info('UI выбрано «' + it.label + '»');
     this.close();
     if (it && it.action) it.action();
   },

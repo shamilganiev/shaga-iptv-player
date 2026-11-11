@@ -129,6 +129,9 @@ var Cache = {
   },
 
   get: function (id) { return this.run('readonly', function (st) { return st.get('pl:' + id); }); },
+  // Прочие записи (сохранённая программа передач — ключ 'epg')
+  getKey: function (k) { return this.run('readonly', function (st) { return st.get(k); }); },
+  setKey: function (k, data) { return this.run('readwrite', function (st) { st.put(data, k); }); },
   set: function (id, data) { return this.run('readwrite', function (st) { st.put(data, 'pl:' + id); }); },
   del: function (id) { return this.run('readwrite', function (st) { st.delete('pl:' + id); }); }
 };

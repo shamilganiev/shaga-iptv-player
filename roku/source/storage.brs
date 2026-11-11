@@ -66,7 +66,8 @@ end function
 
 sub storageSave(data as object)
     sec = storageSection()
-    sec.Write("data", FormatJson(data))
+    ' &h0001: non-ASCII as is, not \uXXXX (Cyrillic group names take 3x less) / кириллица без \uXXXX
+    sec.Write("data", FormatJson(data, &h0001))
     sec.Flush()
 end sub
 

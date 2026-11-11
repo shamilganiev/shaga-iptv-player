@@ -31,8 +31,9 @@ function getAppConfig() as object
 
         ' TV guide: whole load timeout (s), refresh period (s), chunk size (bytes)
         ' Телепрограмма: тайм-аут всей загрузки (с), период обновления (с), размер куска (байт)
-        epgTimeoutSec: 300
-        epgRefreshSec: 21600
+        epgTimeoutSec: 1800
+        epgRefreshSec: 43200
+        epgMaxAgeSec: 86400
         epgChunkBytes: 4194304
 
         ' About / privacy (shown in Settings) / О приложении и политика (в Настройках)

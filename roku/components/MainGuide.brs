@@ -26,8 +26,11 @@ end sub
 
 sub openGuide(ix as integer)
     if ix < 0 or m.channels = invalid then return
-    if m.epgStatus.state <> "ready" then
-        m.previewStatus.text = epgStatusText()
+    st = m.epgStatus.state
+    ' While loading the service answers with what is parsed so far
+    ' Во время загрузки служба отвечает тем, что уже разобрано
+    if st <> "ready" and st <> "loading" then
+        showInfoDialog(m.channels[ix].t, [epgStatusText()])
         return
     end if
     m.progIx = ix
@@ -41,7 +44,10 @@ sub onEpgList()
     if d.key <> epgKeyOf(m.channels[m.progIx]) then return
     m.progItems = d.items
     if m.progItems.Count() = 0 then
-        m.previewStatus.text = m.S.epgNone
+        msg = m.S.epgNone
+        if m.epgStatus.state = "loading" then msg = m.S.epgLoading
+        dbg("UI", "TV guide empty: " + m.epgStatus.state)
+        showInfoDialog(m.channels[m.progIx].t, [msg])
         m.progIx = -1
         return
     end if
@@ -109,13 +115,33 @@ end sub
 sub actOnProgramme(it as object)
     if m.progIx < 0 then return
     now = CreateObject("roDateTime").AsSeconds()
+    ' Second OK on what is already playing: full screen (like a second OK on a channel)
+    ' Повторный OK на том, что уже играет, — полный экран (как повторный OK на канале)
+    if m.playingIx = m.progIx and m.videoState <> "error" then
+        same = false
+        if m.arch <> invalid then
+            same = (m.arch.s = it.s)
+        else
+            same = (it.s <= now and now < it.e)
+        end if
+        if same then
+            dbg("UI", "programme already playing: full screen")
+            enterFull()
+            return
+        end if
+    end if
     if it.s <= now and now < it.e then
         playChannel(m.progIx)
     else if it.e <= now then
         info = archiveInfo(m.channels[m.progIx], currentArchive())
-        if archiveCovers(info, it.s, now) then
+        if info = invalid then
+            ' The playlist gives no archive and the setting is "From the playlist" / Архив не настроен
+            dbg("UI", "archive not set for this playlist")
+            showInfoDialog(it.t, [m.S.archNotSet])
+        else if archiveCovers(info, it.s, now) then
             playArchiveAt(m.progIx, it.s, it.e, it.t, 0)
         else
+            dbg("UI", "programme is older than the archive depth")
             showInfoDialog(it.t, [m.S.archUnavailable])
         end if
     else
@@ -146,7 +172,8 @@ end sub
 ' Full description of the programme on air: asked from the service / Описание передачи в эфире
 sub requestDescription(ix as integer)
     if ix < 0 then return
-    if m.epgStatus.state <> "ready" then
+    st = m.epgStatus.state
+    if st <> "ready" and st <> "loading" then
         showInfoDialog(m.channels[ix].t, [epgStatusText()])
         return
     end if
@@ -161,6 +188,8 @@ function guideDetailArrived(d as object) as boolean
     now = CreateObject("roDateTime").AsSeconds()
     if d.items.Count() > 0 and d.items[0].s <= now then
         showDescription(d.items[0])
+    else if m.epgStatus.state = "loading" then
+        showInfoDialog(m.S.ctxDesc, [m.S.epgLoading])
     else
         showInfoDialog(m.S.ctxDesc, [m.S.epgNone])
     end if

@@ -7,7 +7,7 @@
 //   ares-inspect com.shaga.player --open
 //   в консоли DevTools:  copy(Log.text())   — журнал окажется в буфере обмена компьютера
 var Log = {
-  MAX: 500,
+  MAX: 1500,   // с журналом нажатий записей больше
   KEY: 'log',
   buf: [],
   saveTimer: null,

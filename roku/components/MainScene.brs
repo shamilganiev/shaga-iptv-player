@@ -627,14 +627,28 @@ function groupCat(gi as integer) as integer
     return -1
 end function
 
-' Start on "All channels" / Начинаем со «Все каналы»
+' Start on the group of the last channel (it will autoplay), else "All channels".
+' One jump only: two jumps in a row left the list on the first one and the
+' channels were built twice (1.3.0).
+' Начинаем с группы последнего канала (он включится сам), иначе «Все каналы».
+' Один переход: два перехода подряд оставляли список на первом, каналы строились дважды.
 sub selectFirstGroup()
-    i = allChannelsCat()
+    i = lastChannelCat()
+    if i < 0 then i = allChannelsCat()
     if i < 0 then i = firstChannelCat()
     if i < 0 then return
     m.catList.jumpToItem = i
     showCategory(i)
 end sub
+
+' Category of the last channel if its group is shown, else -1 / Категория последнего канала или -1
+function lastChannelCat() as integer
+    lc = m.data.lastChannel
+    if lc = invalid or m.channels = invalid then return -1
+    k = findChannel(lc.n, lc.g)
+    if k < 0 or groupMode(m.data, lc.g) <> "s" then return -1
+    return groupCat(m.channels[k].gi)
+end function
 
 sub onCatFocused()
     updateCatHeader()
@@ -882,7 +896,18 @@ end sub
 
 function onKeyEvent(key as string, press as boolean) as boolean
     if not press then return false
-    if m.dialogOpen then return false
+    if m.dialogOpen then
+        ' Safety: the flag is set but no dialog is on screen / Страховка: флаг стоит, а окна нет
+        if m.top.dialog = invalid then
+            dbg("UI", "dialog flag reset: no dialog on screen")
+            m.dialogOpen = false
+            m.dlgNode = invalid
+            m.dlgKind = ""
+            m.dlgCtx = invalid
+        else
+            return false
+        end if
+    end if
 
     if key = "OK" and m.okFromList then
         m.okFromList = false
@@ -901,7 +926,7 @@ function onKeyEvent(key as string, press as boolean) as boolean
             openUrlKeyboard("add", "", "")
             return true
         else if key = "back" then
-            m.top.exitApp = true
+            requestExit()
             return true
         end if
         return false
