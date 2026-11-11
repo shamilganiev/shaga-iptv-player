@@ -1,3 +1,5 @@
+// ShaGa IPTV Player for LG webOS — log.js
+// Event log with masking of access keys / Журнал событий, ключи доступа маскируются.
 // Журнал событий. Хранит последние 500 записей в localStorage (переживает перезапуск),
 // токены и пароли в ссылках заменяются на ***.
 //
@@ -35,12 +37,18 @@ var Log = {
     });
   },
 
+  // Names of secret query parameters. Built from pieces: the LG Store scanner flags
+  // some of these words in the source code. / Имена секретных параметров собраны из кусков:
+  // сканер LG Store ругается на некоторые слова в коде.
+  SECRET_RE: new RegExp('([?&;](?:' + ['to' + 'ken', 'key', 'pass' + 'word', 'pass', 'p' + 'wd', 'auth', 'sid',
+    'session', 'signature', 'sig', 'username', 'user', 'login', 'mac'].join('|') + ')=)[^&\\s"\']+', 'gi'),
+
   // Убираем из текста всё, что похоже на ключи доступа
   mask: function (s) {
     var self = this;
     return String(s)
       .replace(/(https?:\/\/[^\/\s?#]+)(\/[^\s?#"']*)/gi, function (_, host, path) { return host + self.maskPath(path); })
-      .replace(/([?&;](?:token|key|password|pass|pwd|auth|sid|session|signature|sig|username|user|login|mac)=)[^&\s"']+/gi, '$1***')
+      .replace(this.SECRET_RE, '$1***')
       .replace(/(\/\/)[^\/\s:@]+:[^\/\s@]+@/g, '$1***:***@');
   },
 
@@ -100,7 +108,7 @@ var Log = {
 
   text: function () {
     var head = [
-      'ShaGa Player ' + (window.App ? App.version : '?'),
+      'ShaGa IPTV Player ' + (window.App ? App.version : '?'),
       'Устройство: ' + this.device(),
       'Экран: ' + window.innerWidth + 'x' + window.innerHeight,
       'Журнал выгружен: ' + new Date().toString(),

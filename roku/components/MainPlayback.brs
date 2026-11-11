@@ -8,14 +8,58 @@
 
 ' ---------- playback / воспроизведение ----------
 
+' Live channel (or a file) / Прямой эфир канала (или файл)
 sub playChannel(ix as integer)
     if m.channels = invalid or ix < 0 or ix >= m.channels.Count() then return
+    m.arch = invalid
+    ch = m.channels[ix]
+    playStream(ix, ch.u, ch.v <> true)
+end sub
+
+' Programme from the archive, from `offset` seconds after its start
+' Передача из архива, начиная через `offset` секунд от её начала
+sub playArchiveAt(ix as integer, s as integer, e as integer, title as string, offset as integer)
+    if m.channels = invalid or ix < 0 then return
+    ch = m.channels[ix]
+    info = archiveInfo(ch, currentArchive())
+    if info = invalid then return
+    now = CreateObject("roDateTime").AsSeconds()
+    url = archiveUrl(ch.u, info, s + offset, e, now)
+    ' Own clock: Video.position of archive/shift streams follows the wall clock, not frames
+    ' Свои часы: Video.position у архива/shift идёт по часам, а не по кадрам
+    m.arch = { s: s, e: e, t: title, base: offset, acc: 0, run: false, clock: CreateObject("roTimespan"), type: info.t }
+    dbg("PLAY", "archive " + info.t + " #" + (ix + 1).ToStr() + " " + hhmm(s) + "-" + hhmm(e) + " +" + offset.ToStr() + "s")
+    playStream(ix, url, false)
+end sub
+
+' Seconds since the programme start in the archive / Секунды от начала передачи в архиве
+function archPos() as integer
+    a = m.arch
+    if a = invalid then return 0
+    p = a.base + a.acc
+    if a.run then p = p + a.clock.TotalSeconds()
+    return p
+end function
+
+sub seekArchive(delta as integer)
+    a = m.arch
+    if a = invalid or m.playingIx < 0 then return
+    p = archPos() + delta
+    maxP = a.e - a.s - 30
+    now = CreateObject("roDateTime").AsSeconds()
+    if a.s + maxP > now - 30 then maxP = now - 30 - a.s
+    if p > maxP then p = maxP
+    if p < 0 then p = 0
+    playArchiveAt(m.playingIx, a.s, a.e, a.t, p)
+end sub
+
+sub playStream(ix as integer, url as string, live as boolean)
     ch = m.channels[ix]
     c = CreateObject("roSGNode", "ContentNode")
-    c.url = ch.u
+    c.url = url
     c.title = ch.t
     c.streamFormat = ch.f
-    c.live = (ch.v <> true)
+    c.live = live
     headers = []
     if ch.ua <> "" then headers.push("User-Agent:" + ch.ua)
     if ch.rf <> "" then headers.push("Referer:" + ch.rf)
@@ -28,7 +72,7 @@ sub playChannel(ix as integer)
     m.video.control = "play"
     m.startTimer.control = "stop"
     m.startTimer.control = "start"
-    dbg("PLAY", "#" + (ix + 1).ToStr() + " '" + ch.t + "' fmt=" + ch.f + " url=" + maskUrl(ch.u))
+    dbg("PLAY", "#" + (ix + 1).ToStr() + " '" + ch.t + "' fmt=" + ch.f + " url=" + maskUrl(url))
     updatePreviewStatus()
     updateChanHeader()
     refreshInfoPanel()
@@ -44,6 +88,7 @@ sub stopVideo()
         if openGroupPlaying() then m.openGroupSeen.Mark()
     end if
     m.playingIx = -1
+    m.arch = invalid
     m.videoState = "none"
     m.startTimer.control = "stop"
     hideVideoSpinner()
@@ -60,6 +105,17 @@ sub onVideoState()
     st = m.video.state
     if m.playingIx < 0 then return     ' nothing of ours is playing / ничего нашего не играет
     m.videoState = st
+    ' Archive clock runs only while playing (pause counts as stopped clock)
+    ' Часы архива идут только во время показа
+    if m.arch <> invalid then
+        if st = "playing" and not m.arch.run then
+            m.arch.clock.Mark()
+            m.arch.run = true
+        else if st <> "playing" and m.arch.run then
+            m.arch.acc = m.arch.acc + m.arch.clock.TotalSeconds()
+            m.arch.run = false
+        end if
+    end if
     if st = "buffering" then
         m.spinTimer.control = "stop"
         m.spinTimer.control = "start"
@@ -173,7 +229,12 @@ sub showOsd()
     g = ch.g
     if g = "" then g = m.S.ungrouped
     pr = epgNowOf(m.playingIx)
-    if pr <> invalid then g = g + "      " + hhmm(pr.s) + " – " + hhmm(pr.e) + "   " + pr.t
+    if m.arch <> invalid then
+        a = m.arch
+        g = m.S.archLabel + "      " + hhmm(a.s) + " – " + hhmm(a.e) + "   " + a.t + "      (" + hhmm(a.s + archPos()) + ")"
+    else if pr <> invalid then
+        g = g + "      " + hhmm(pr.s) + " – " + hhmm(pr.e) + "   " + pr.t
+    end if
     if m.videoState = "error" then g = m.lastError
     m.osdSub.text = g
     m.osd.visible = true
@@ -225,6 +286,7 @@ end sub
 ' ---------- last channel and autoplay / последний канал и автозапуск ----------
 
 sub rememberLastChannel()
+    if m.arch <> invalid then return     ' only live channels / только прямой эфир
     ch = m.channels[m.playingIx]
     lc = m.data.lastChannel
     if lc <> invalid and lc.n = ch.t and lc.g = ch.g then return

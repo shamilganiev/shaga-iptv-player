@@ -12,6 +12,8 @@
 '   f  streamFormat              v  true = VOD (file), false = live / true = файл, false = эфир
 '   k  search key / ключ поиска
 '   gi group index in groups[] / номер группы в groups[]
+'   cu / cs / cd archive (catchup) type, source template, days — only when present
+'      архив (catchup): тип, шаблон, дни — только если указаны
 '   ek TV guide key: tvg-id, else "n:" + normalized title / ключ телепрограммы: tvg-id, иначе "n:" + название
 
 sub init()
@@ -150,6 +152,7 @@ function parseM3u(text as string) as dynamic
     channels = []
     groups = []
     epgUrl = ""
+    hdrCatch = invalid
     groupPos = {}
     pending = invalid
     pendingGrp = ""
@@ -164,6 +167,7 @@ function parseM3u(text as string) as dynamic
             up = UCase(line.Left(11))
             if up.Left(7) = "#EXTM3U" then
                 epgUrl = pickEpgUrl(line, rxAttr)
+                hdrCatch = parseCatchup(lineAttrs(line, rxAttr))
             else if up.Left(8) = "#EXTINF:" then
                 pending = parseExtinf(line, rxAttr, rxTitle)
                 pendingGrp = ""
@@ -192,6 +196,12 @@ function parseM3u(text as string) as dynamic
             ch.u = line
             if ch.t = "" then ch.t = fileNameOf(line)
             if ch.id <> "" then ch.ek = ch.id else ch.ek = "n:" + epgNorm(ch.t)
+            ' Header catchup defaults for channels without their own / Значения архива из заголовка
+            if ch.cu = invalid and hdrCatch <> invalid then
+                ch.cu = hdrCatch.cu
+                if hdrCatch.cs <> "" then ch.cs = hdrCatch.cs
+                ch.cd = hdrCatch.cd
+            end if
             if ch.id = "" then ch.id = ch.t
             fmt = detectFormat(line)
             ch.f = fmt.f
@@ -211,6 +221,34 @@ function parseM3u(text as string) as dynamic
         end if
     end for
     return { channels: channels, groups: groups, epgUrl: epgUrl }
+end function
+
+function lineAttrs(line as string, rxAttr as object) as object
+    a = {}
+    for each mt in rxAttr.MatchAll(line)
+        a[LCase(mt[1])] = mt[2]
+    end for
+    return a
+end function
+
+' Archive attributes: catchup / catchup-type, catchup-source / catchup-template,
+' catchup-days / tvg-rec / timeshift. Days without a type mean "shift".
+' Атрибуты архива. Дни без типа означают "shift".
+function parseCatchup(a as object) as dynamic
+    t = ""
+    if a["catchup"] <> invalid then t = LCase(a["catchup"])
+    if t = "" and a["catchup-type"] <> invalid then t = LCase(a["catchup-type"])
+    src = ""
+    if a["catchup-source"] <> invalid then src = a["catchup-source"]
+    if src = "" and a["catchup-template"] <> invalid then src = a["catchup-template"]
+    days = 0
+    for each k in ["catchup-days", "tvg-rec", "timeshift"]
+        if days = 0 and a[k] <> invalid then days = a[k].ToInt()
+    end for
+    if t = "" and days > 0 then t = "shift"
+    if t = "" then return invalid
+    if days <= 0 then days = 3
+    return { cu: t, cs: src, cd: days }
 end function
 
 ' First real http(s) link from url-tvg / x-tvg-url ("a.xml,b.xml" or "name;x" are possible)
@@ -248,6 +286,12 @@ function parseExtinf(line as string, rxAttr as object, rxTitle as object) as obj
     if a["user-agent"] <> invalid then ch.ua = a["user-agent"]
     if a["http-user-agent"] <> invalid then ch.ua = a["http-user-agent"]
     if a["http-referrer"] <> invalid then ch.rf = a["http-referrer"]
+    c = parseCatchup(a)
+    if c <> invalid then
+        ch.cu = c.cu
+        if c.cs <> "" then ch.cs = c.cs
+        ch.cd = c.cd
+    end if
     return ch
 end function
 

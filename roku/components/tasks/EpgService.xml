@@ -17,6 +17,10 @@
         <field id="detailKey" type="string" alwaysNotify="true" />
         <!-- { key, items: [ { s, e, t, d } ] } current + next / текущая и следующие -->
         <field id="detail" type="assocarray" />
+        <!-- request: channel key -> list: { key, items: all programmes in the window } -->
+        <!-- запрос: ключ канала -> list: все передачи канала в окне -->
+        <field id="listKey" type="string" alwaysNotify="true" />
+        <field id="list" type="assocarray" />
     </interface>
     <script type="text/brightscript" uri="EpgService.brs" />
     <script type="text/brightscript" uri="EpgParse.brs" />

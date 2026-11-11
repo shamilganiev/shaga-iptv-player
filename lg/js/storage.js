@@ -1,3 +1,4 @@
+// ShaGa IPTV Player for LG webOS — storage.js
 // Всё хранится в localStorage телевизора. Ошибки (переполнение, запрет) не роняют приложение.
 var Store = {
   get: function (key, def) {

@@ -1,4 +1,5 @@
-/* Экран телевизора: фиксированные 1920x1080, крупный шрифт для просмотра с дивана.
+/* ShaGa IPTV Player for LG webOS — app.css
+   Экран телевизора: фиксированные 1920x1080, крупный шрифт для просмотра с дивана.
    Фокус — янтарный, как подсветка на старом тюнере. */
 :root {
   --bg: #141C2E;
@@ -206,7 +207,7 @@ body.has-video #browser {
 .c-text { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
 .c-name { font-size: 26px; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; }
 .c-prog {
-  font-size: 19px;
+  font-size: 20px;
   line-height: 1.25;
   margin-top: 3px;
   color: var(--muted);
@@ -336,7 +337,7 @@ body.has-video #settings { background: rgba(20,28,46,.96); }
 .set-wrap .lead { margin-bottom: 36px; }
 #setGroups { top: 220px; }
 .s-row {
-  height: 88px;
+  height: 80px;
   padding: 0 32px;
   display: flex;
   align-items: center;
@@ -522,3 +523,30 @@ body.has-video #settings { background: rgba(20,28,46,.96); }
 
 /* Приветствие */
 .setup-wrap .btn-row { margin-top: 8px; }
+
+/* ---------- 1.3.0 ---------- */
+/* Верхняя строка «Вы смотрите: канал» — в верхнем поле над колонками */
+.top-now {
+  position: absolute;
+  left: var(--pad-x); right: var(--pad-x); top: 10px;
+  height: 40px;
+  font-size: 26px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.top-now .h-pre { color: var(--amber); margin-right: 12px; }
+.dot.red { background: #E0453D; }
+#cfMsg { white-space: pre-line; }
+
+/* Программа канала в третьей колонке */
+#progBox { position: absolute; left: 0; right: 0; top: 84px; bottom: 0; }
+#progList { position: absolute; left: 0; right: 0; top: 0; height: 558px; }
+.p-row { padding: 0 18px; font-size: 25px; }
+.p-row .p-time { width: 190px; flex-shrink: 0; color: var(--muted); font-variant-numeric: tabular-nums; }
+.p-row .p-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.p-row.past .p-title { color: #B4BCCF; }
+.p-row.cur .p-title, .p-row.cur .p-time { color: var(--amber); font-weight: 700; }
+.vrow.focus.p-row .p-time, .vrow.focus.p-row .p-title { color: var(--ink); }
+.p-desc {
+  position: absolute; left: 4px; right: 4px; top: 574px; bottom: 0;
+  margin: 0; font-size: 23px; line-height: 1.4; color: #C3CBDD; overflow: hidden;
+}

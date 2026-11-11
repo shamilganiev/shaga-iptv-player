@@ -1,3 +1,5 @@
+// ShaGa IPTV Player for LG webOS — player.js
+// Playback: live channels and archive (catchup) / Просмотр: эфир и архив.
 // Просмотр. Два движка:
 //  native — встроенный плеер webOS через <video src>; HLS он понимает сам, но перед стартом
 //           копит несколько сегментов, поэтому может запускаться долго;
@@ -22,6 +24,10 @@ var Player = {
   waitT: 0,        // когда началась буферизация
   stages: {},      // этапы старта, которые уже записаны в журнал
   startedCbs: [],  // кто ждёт первого кадра (фоновое обновление плейлиста)
+  // Archive: own clock, because the stream position of shift/catchup streams follows the wall clock.
+  // Архив: свои часы — позиция у shift/catchup-потоков идёт по часам, а не по кадрам.
+  // { s, e (секунды UTC), t (название), base (сек от начала передачи), acc, run, since }
+  arch: null,
 
   HLS_CONFIG: {
     enableWorker: true,
@@ -60,11 +66,14 @@ var Player = {
       }
       self.waitT = 0;
       clearTimeout(self.spinTimer);
+      self.clockRun();
       self.setState('playing');
     });
+    v.addEventListener('pause', function () { self.clockStop(); });
 
     // Значок загрузки — только если пауза дольше 0,7 с: короткие подвисания не мелькают
     v.addEventListener('waiting', function () {
+      self.clockStop();
       if (self.state === 'playing' && !self.waitT) {
         self.waitT = Date.now();
         clearTimeout(self.spinTimer);
@@ -127,9 +136,12 @@ var Player = {
     return want && isHls && ok ? 'hlsjs' : 'native';
   },
 
-  start: function (ch) {
+  // url — своя ссылка (архив), arch — данные архива; без них — прямой эфир
+  start: function (ch, url, arch) {
     var self = this, v = this.video;
     this.teardown();
+    this.arch = arch || null;
+    url = url || ch.url;
     if (App.openLocked !== null && ch.group !== App.openLocked) {
       App.lockTouch[App.openLocked] = Date.now();
       App.openLocked = null;
@@ -139,19 +151,21 @@ var Player = {
     this.waitT = 0;
     this.stages = {};
     this.hlsRetries = 0;
-    Config.d.last = { name: ch.name, gid: this.gid };
-    Config.save();
+    if (!this.arch) {                     // последний канал запоминается только для эфира
+      Config.d.last = { name: ch.name, gid: this.gid };
+      Config.save();
+    }
     document.body.classList.add('has-video');
 
-    this.engine = this.pickEngine(ch.url);
+    this.engine = this.pickEngine(url);
     this.t0 = Date.now();
-    Log.info('Канал ' + ch.n + ' «' + ch.name + '» [' + (ch.group || '-') + '] ' + Log.url(ch.url) +
-      ' — движок ' + this.engine);
+    Log.info((this.arch ? 'Архив' : 'Канал') + ' ' + ch.n + ' «' + ch.name + '» [' + (ch.group || '-') + '] ' +
+      Log.url(url) + ' — движок ' + this.engine);
     this.setState('loading');
 
-    if (this.engine === 'hlsjs') this.startHls(ch.url);
+    if (this.engine === 'hlsjs') this.startHls(url);
     else {
-      v.src = ch.url;
+      v.src = url;
       v.load();
       var p = v.play();
       if (p && p.catch) p.catch(function () {});
@@ -218,8 +232,59 @@ var Player = {
     }
   },
 
+  // ---------- Архив ----------
+  // Передача из архива: s, e — миллисекунды (как в EPG), offset — секунды от начала передачи
+  playArchive: function (list, idx, gid, prog, offset) {
+    var ch = list[idx], pl = Playlists.byId(App.plId);
+    var info = Catchup.info(ch, pl && pl.arch);
+    if (!info) return false;
+    var s = Math.floor(prog.s / 1000), e = Math.floor(prog.e / 1000), now = Math.floor(Date.now() / 1000);
+    offset = offset || 0;
+    var url = Catchup.url(ch.url, info, s + offset, e, now);
+    this.list = list;
+    this.idx = idx;
+    this.gid = gid;
+    Log.info('Архив ' + info.t + ': ' + EPG.hm(prog.s) + '–' + EPG.hm(prog.e) + ' +' + offset + ' с');
+    this.start(ch, url, { s: s, e: e, t: prog.t, base: offset, acc: 0, run: false, since: 0 });
+    return true;
+  },
+
+  clockRun: function () {
+    var a = this.arch;
+    if (a && !a.run) { a.run = true; a.since = Date.now(); }
+  },
+
+  clockStop: function () {
+    var a = this.arch;
+    if (a && a.run) { a.acc += (Date.now() - a.since) / 1000; a.run = false; }
+  },
+
+  // Секунды от начала передачи
+  archPos: function () {
+    var a = this.arch;
+    if (!a) return 0;
+    return Math.floor(a.base + a.acc + (a.run ? (Date.now() - a.since) / 1000 : 0));
+  },
+
+  // Перемотка в архиве — перезапуском потока с нового места (как в Roku)
+  seekArchive: function (delta) {
+    var a = this.arch;
+    if (!a || !this.ch) return;
+    var now = Math.floor(Date.now() / 1000), p = this.archPos() + delta;
+    var maxP = Math.min(a.e - a.s - 30, now - 30 - a.s);
+    p = Math.max(0, Math.min(p, maxP));
+    this.playArchive(this.list, this.idx, this.gid, { s: a.s * 1000, e: a.e * 1000, t: a.t }, p);
+  },
+
+  mmss: function (sec) {
+    sec = Math.max(0, Math.floor(sec));
+    var h = Math.floor(sec / 3600), m = Math.floor(sec / 60) % 60, x = sec % 60;
+    return (h ? h + ':' + (m < 10 ? '0' : '') : '') + m + ':' + (x < 10 ? '0' : '') + x;
+  },
+
   // Полностью отпустить текущий поток (оба движка)
   teardown: function () {
+    this.clockStop();
     clearTimeout(this.stallTimer);
     clearTimeout(this.spinTimer);
     this.waitT = 0;
@@ -244,9 +309,10 @@ var Player = {
   stop: function () {
     this.teardown();
     this.ch = null;
+    this.arch = null;
     this.setState('idle');
     document.body.classList.remove('has-video');
-    App.relockIfLeft(App.screen === Browser ? Browser.gid : null);
+    App.touchLock();     // 10 минут без просмотра считаются от остановки
   },
 
   step: function (d) {
@@ -276,9 +342,17 @@ var Player = {
     $('bSub').innerHTML = '';
     $('bSub').appendChild(document.createTextNode(ch.group || t('noGroup')));
     if (App.isFav(ch)) $('bSub').appendChild(document.createTextNode('  ★'));
-    var pr = EPG.now(ch), bp = $('bProg');
+    var pr = EPG.now(ch), bp = $('bProg'), a = this.arch;
     bp.innerHTML = '';
-    if (pr) {
+    if (a) {
+      // Архив: «Архив: передача  12:00 – 13:00  5:10 / 60:00»
+      bp.appendChild(document.createTextNode(t('archLabel') + ': ' + a.t));
+      var at = document.createElement('span');
+      at.className = 't';
+      at.textContent = EPG.hm(a.s * 1000) + ' – ' + EPG.hm(a.e * 1000) + '   ' +
+        this.mmss(this.archPos()) + ' / ' + this.mmss(a.e - a.s);
+      bp.appendChild(at);
+    } else if (pr) {
       bp.appendChild(document.createTextNode(pr.t));
       var tm = document.createElement('span');
       tm.className = 't';
@@ -318,8 +392,15 @@ var Player = {
       this.teardown();
       this.suspended = true;
     } else if (visible && this.suspended && this.ch) {
-      if (App.isHidden(this.ch.group)) { this.suspended = false; return; }   // группу скрыли при сворачивании
-      this.start(this.ch);
+      this.suspended = false;
+      // Флаг PIN сброшен при сворачивании — канал из группы «По PIN» сам не включаем
+      if (App.isHidden(this.ch.group) || !App.isOpen(this.ch.group)) {
+        this.stop();
+        if (App.screen === this) App.show('browser');
+        return;
+      }
+      if (this.arch) this.seekArchive(0);
+      else this.start(this.ch);
     }
   },
 
@@ -329,11 +410,20 @@ var Player = {
       case K.CHUP: case K.UP: this.step(Config.d.zapInvert ? -1 : 1); return true;
       case K.CHDN: case K.DOWN: this.step(Config.d.zapInvert ? 1 : -1); return true;
       case K.OK:
-        if (this.state === 'error') this.start(this.ch);
+        if (this.state === 'error') { if (this.arch) this.seekArchive(0); else this.start(this.ch); }
         else App.show('browser', { fromPlayer: true });
         return true;
       case K.BACK: App.show('browser', { fromPlayer: true }); return true;
-      case K.LEFT: case K.RIGHT: this.drawBanner(); this.showBanner(); return true;
+      // В архиве: влево/вправо — минута, перемотка — 5 минут
+      case K.LEFT: case K.RIGHT:
+        if (this.arch) this.seekArchive(code === K.LEFT ? -60 : 60);
+        else { this.drawBanner(); this.showBanner(); }
+        return true;
+      case K.REW: case K.FF:
+        if (this.arch) this.seekArchive(code === K.REW ? -300 : 300);
+        return true;
+      case K.PAUSE: this.clockStop(); this.video.pause(); this.drawBanner(); this.showBanner(true); return true;
+      case K.PLAY: if (this.video.paused) { var pp = this.video.play(); if (pp && pp.catch) pp.catch(function () {}); } this.showBanner(); return true;
       case K.YELLOW: if (this.ch) { App.toggleFav(this.ch); this.drawBanner(); this.showBanner(); } return true;
       case K.BLUE: App.show('settings'); return true;
       case K.STOP: this.stop(); App.show('browser'); return true;

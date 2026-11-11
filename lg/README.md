@@ -1,10 +1,10 @@
-# ShaGa Player
+# ShaGa IPTV Player — LG webOS
 
 Универсальный плеер M3U-плейлистов. Сам каналов не содержит.
 
 ## Установка на телевизор
-    ares-package .              # из папки проекта; появится com.shaga.player_0.4.0_all.ipk
-    ares-install com.shaga.player_0.4.0_all.ipk
+    ares-package .              # из папки проекта; появится com.shaga.player_1.3.0_all.ipk
+    ares-install com.shaga.player_1.3.0_all.ipk
     ares-launch com.shaga.player
 
 ## Отладка
@@ -12,7 +12,7 @@
 
 ## Проверка в браузере на компьютере
 Открыть index.html через локальный сервер (python -m http.server).
-Esc = Back, PageUp/PageDown = CH+/CH−, Y = жёлтая кнопка, B = синяя.
+Esc = Back, PageUp/PageDown = CH+/CH−, R = красная (меню), Y = жёлтая, B = синяя.
 
 ## Структура
     appinfo.json      манифест webOS
@@ -30,4 +30,5 @@ Esc = Back, PageUp/PageDown = CH+/CH−, Y = жёлтая кнопка, B = си
     js/settings.js    настройки
     js/setup.js       приветствие при первом запуске
     js/epg.js         программа передач (XMLTV)
+    js/catchup.js     ссылки на архив (как source/catchup.brs в Roku)
     js/app.js         ядро, пульт

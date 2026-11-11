@@ -134,6 +134,10 @@ sub onDialogButton()
         onPinDialogButton(kind, b, ctx)
     else if kind = "groupMode" then
         onGroupModeButton(b, ctx)
+    else if kind = "context" then
+        onContextButton(b, ctx)
+    else if kind = "archType" or kind = "archDays" then
+        onArchDialogButton(kind, b, ctx)
     else
         closeDialog()
     end if

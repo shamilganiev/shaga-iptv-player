@@ -160,6 +160,7 @@ sub refreshInfoPanel()
     g = ch.g
     if g = "" then g = m.S.ungrouped
     m.chGroup.text = g
+    if m.progList.visible then return     ' the programme list is shown / открыт список передач
     key = epgKeyOf(ch)
     minute = CreateObject("roDateTime").AsSeconds() \ 60
     if m.epgStatus.state = "ready" and (key <> m.epgAskedKey or minute <> m.epgAskedMinute) then
@@ -175,10 +176,11 @@ sub refreshInfoPanel()
 end sub
 
 sub onEpgDetail()
+    if guideDetailArrived(m.epgSvc.detail) then return
     m.epgDetail = m.epgSvc.detail
     ix = infoTarget()
     if ix < 0 or m.channels = invalid then return
-    if m.epgDetail.key <> epgKeyOf(m.channels[ix]) then return
+    if m.epgDetail.key <> epgKeyOf(m.channels[ix]) or m.progList.visible then return
     renderProgramme(m.epgDetail.items)
 end sub
 

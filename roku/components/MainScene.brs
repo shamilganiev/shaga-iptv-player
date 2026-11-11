@@ -58,6 +58,9 @@ sub init()
     m.settingsRows = []
     m.okFromList = false       ' OK already handled by a list / OK уже обработан списком
     m.okClock = CreateObject("roTimespan")
+    m.playlistStale = false    ' fresh copy failed, showing the saved one / свежая копия не загрузилась
+    m.settingsPage = "main"
+    m.arch = invalid           ' archive playback state / состояние показа архива
     m.pendingNew = invalid     ' playlist being added/edited, saved only after it loads / сохраняется после загрузки
     m.kbError = ""             ' load error shown in the link keyboard / ошибка загрузки в окне ссылки
 
@@ -115,6 +118,7 @@ sub init()
 
     applyDialogPalette()
     epgInit()
+    guideInit()
 
     ' --- saved data and language / сохранённые данные и язык ---
     m.data = storageLoad()
@@ -195,7 +199,9 @@ sub focusArea(area as string)
     if area = "chan" and m.view = "channels" and m.curIdx.Count() = 0 then area = "cat"
     m.focusArea = area
     if m.mode <> "main" or m.dialogOpen then return
-    if area = "chan" then
+    if area = "prog" then
+        m.progList.setFocus(true)
+    else if area = "chan" then
         m.chanList.setFocus(true)
     else
         m.catList.setFocus(true)
@@ -228,11 +234,18 @@ end sub
 ' Видео: передача на играющем канале, иначе на выделенном
 ' (пока телепрограммы нет — название канала).
 sub updateChanHeader()
+    ' Top line: what is playing (live or archive) / Верхняя строка: что показывается
+    if m.playingIx >= 0 and m.channels <> invalid then
+        m.playlistLabel.text = m.S.nowWatching + " " + m.channels[m.playingIx].t
+    else
+        m.playlistLabel.text = ""
+    end if
     focusedIx = focusedChannel()
     if m.view = "settings" then
-        m.chanHeader.text = m.S.settingsTitle
-    else if m.playingIx >= 0 and m.channels <> invalid then
-        m.chanHeader.text = m.S.nowWatching + " " + m.channels[m.playingIx].t
+        h = m.S.settingsTitle
+        if m.settingsPage = "playlist" then h = h + "  >  " + m.S.playlistRow
+        if m.settingsPage = "groups" then h = h + "  >  " + m.S.groupsRow
+        m.chanHeader.text = h
     else if focusedIx >= 0 then
         m.chanHeader.text = m.channels[focusedIx].t
     else
@@ -248,7 +261,13 @@ sub updateChanHeader()
         m.videoHeader.text = ""
     else
         pr = epgNowOf(target)
-        if pr <> invalid then m.videoHeader.text = pr.t else m.videoHeader.text = m.channels[target].t
+        if target = m.playingIx and m.arch <> invalid then
+            m.videoHeader.text = m.S.archLabel + ": " + m.arch.t
+        else if pr <> invalid then
+            m.videoHeader.text = pr.t
+        else
+            m.videoHeader.text = m.channels[target].t
+        end if
     end if
 end sub
 
@@ -293,8 +312,7 @@ sub startLoad(id as string, mode as string, silent as boolean)
             m.chanList.content = invalid
             m.curIdx = []
         end if
-        m.playlistLabel.text = p.name
-        showMessage(m.S.loading, true)
+        showMessage(p.name + Chr(10) + m.S.loading, true)
     end if
     m.loader.control = "RUN"
 end sub
@@ -345,16 +363,14 @@ sub onLoaded()
             ' Showing the saved copy; say it could not be updated
             ' Показана сохранённая копия; сообщаем, что обновить не удалось
             showMessage("", false)
-            m.playlistLabel.text = playlistLabelText() + "  ·  " + m.S.fromCache
+            m.playlistStale = true
         else if m.channels = invalid then
-            text = m.S.errTitle + Chr(10) + Chr(10) + loadErrorText(r) + Chr(10) + Chr(10) + m.S.errHint
+            text = name + Chr(10) + Chr(10) + m.S.errTitle + Chr(10) + Chr(10) + loadErrorText(r) + Chr(10) + Chr(10) + m.S.errHint
             showMessage(text, false)
-            m.playlistLabel.text = name
             buildCategories(1)
             focusArea("cat")
         else
             showMessage("", false)
-            m.playlistLabel.text = playlistLabelText()
             showInfoDialog(m.S.errTitle, [loadErrorText(r)])
         end if
         sendLaunchBeacon("load-error")
@@ -369,7 +385,6 @@ function commitPending(r as object) as boolean
     if r.ok <> true then
         dbg("ERR", "new playlist link did not load: " + r.error)
         showMessage("", false)
-        m.playlistLabel.text = playlistLabelText()
         m.kbError = m.S.errTitle + ": " + loadErrorText(r)
         openUrlKeyboard(pn.mode, pn.id, pn.url)
         sendLaunchBeacon("load-error")
@@ -401,7 +416,7 @@ sub applyChannels(r as object, name as string)
     m.currentId = r.playlistId
     m.openGroup = invalid
     showMessage("", false)
-    m.playlistLabel.text = playlistLabelText()
+    m.playlistStale = false
     m.view = "channels"
     buildCategories(-1)
     selectFirstGroup()
@@ -433,7 +448,7 @@ sub swapChannels(r as object, name as string)
             stopVideo()
         end if
     end if
-    m.playlistLabel.text = playlistLabelText()
+    m.playlistStale = false
     if m.searchQuery <> "" then
         ' Search results recalculated on the fresh list / Результаты поиска — по свежему списку
         buildCategories(-1)
@@ -478,7 +493,7 @@ function playlistLabelText() as string
 end function
 
 sub restorePlaylistLabel()
-    m.playlistLabel.text = playlistLabelText()
+    updateChanHeader()
 end sub
 
 ' Forget the loaded playlist (e.g. after deleting it) / Сбросить загруженный плейлист
@@ -497,7 +512,7 @@ sub clearChannels()
     m.curCat = -1
     m.view = "channels"
     m.chanList.content = invalid
-    m.playlistLabel.text = ""
+    m.playlistStale = false
     showMessage("", false)
     clearPreview()
 end sub
@@ -768,6 +783,8 @@ sub updatePreviewStatus()
         m.previewStatus.text = ""
     else if focusedIx = m.playingIx and m.videoState = "error" then
         m.previewStatus.text = m.lastError
+    else if focusedIx = m.playingIx and m.arch <> invalid then
+        m.previewStatus.text = m.S.archLabel + ": " + hhmm(m.arch.s) + " – " + hhmm(m.arch.e) + "  " + m.arch.t
     else if focusedIx = m.playingIx then
         m.previewStatus.text = m.S.previewPlaying
     else
@@ -893,6 +910,13 @@ function onKeyEvent(key as string, press as boolean) as boolean
     if m.mode = "full" then
         if key = "back" then
             exitFull()
+        else if m.arch <> invalid and (key = "left" or key = "right" or key = "rewind" or key = "fastforward" or key = "replay") then
+            ' Archive: seek by restarting the link / Архив: перемотка перезапуском ссылки
+            if key = "left" then seekArchive(-60)
+            if key = "right" then seekArchive(60)
+            if key = "rewind" then seekArchive(-300)
+            if key = "fastforward" then seekArchive(300)
+            if key = "replay" then seekArchive(-15)
         else if key = "up" or key = "channelUp" then
             zap(zapDelta(true))
         else if key = "down" or key = "channelDown" then
@@ -920,10 +944,20 @@ function onKeyEvent(key as string, press as boolean) as boolean
     ' main / главный экран
     if key = "down" or key = "up" then
         return wrapList(key)
+    else if key = "options" then
+        openContextMenu()
+        return true
+    else if m.focusArea = "prog" and (key = "back" or key = "left") then
+        closeGuide()
+        return true
+    else if key = "right" and m.focusArea = "chan" and m.view = "channels" then
+        openGuide(focusedChannel())
+        return true
     else if key = "back" then
-        ' Step back: channels -> groups -> stop video -> exit window
-        ' Шаг назад: каналы -> группы -> остановить видео -> окно выхода
+        ' Step back: (programme list ->) channels -> groups -> stop video -> exit window
+        ' Шаг назад: (список передач ->) каналы -> группы -> остановить видео -> окно выхода
         if m.focusArea = "chan" then
+            if settingsBack() then return true
             if m.view = "settings" then leaveSettings(true)
             focusArea("cat")
         else if m.playingIx >= 0 then
@@ -941,11 +975,6 @@ function onKeyEvent(key as string, press as boolean) as boolean
         if m.view = "settings" then leaveSettings(true)
         focusArea("cat")
         return true
-    else if key = "options" then
-        if m.focusArea = "chan" and m.view = "channels" then
-            toggleFavorite(focusedChannel())
-            return true
-        end if
     else if key = "play" then
         if m.playingIx >= 0 then
             togglePause()
@@ -963,7 +992,9 @@ end function
 ' Циклическая прокрутка: список не обработал вверх/вниз на краю — переходим
 ' на другой конец. Одно место для обеих колонок (и Настроек в колонке каналов).
 function wrapList(key as string) as boolean
-    if m.focusArea = "chan" then
+    if m.focusArea = "prog" then
+        lst = m.progList
+    else if m.focusArea = "chan" then
         lst = m.chanList
     else
         lst = m.catList

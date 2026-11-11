@@ -8,7 +8,8 @@
 '
 ' { v: 1, lang: "auto", lastOkId: "p3", nextId: 4,
 '   playlists: [ { id: "p1", name: "example.com", url: "https://..." } ],
-'   pin: "" (4 digits or empty / 4 цифры или пусто),
+'   pin: "" or "h:<sha256>" (hash of the PIN, never the digits / хеш PIN, не сами цифры),
+'   playlists[].arch: { t: "auto"|"off"|"shift"|"flussonic"|"xc", d: days } (archive / архив),
 '   groupModes: { "g:<group name>": "s" | "p" | "h" } (shown / PIN / hidden),
 '   favorites: [channel names / названия каналов], lastChannel: { n: name, g: group },
 '   zapMode: "list" (Up = smaller number / вверх = меньший номер) | "classic" }
@@ -42,6 +43,9 @@ function storageMigrate(d as object) as object
     if d.lastOkId <> invalid then out.lastOkId = d.lastOkId.ToStr()
     if d.nextId <> invalid then out.nextId = d.nextId
     if d.pin <> invalid then out.pin = d.pin.ToStr()
+    ' Old versions kept the PIN as plain digits: turn it into a hash once
+    ' Старые версии хранили PIN цифрами: один раз превращаем в хеш
+    if out.pin <> "" and out.pin.Left(2) <> "h:" then out.pin = pinHash(out.pin)
     if d.groupModes <> invalid and type(d.groupModes) = "roAssociativeArray" then out.groupModes = d.groupModes
     if d.favorites <> invalid and type(d.favorites) = "roArray" then out.favorites = d.favorites
     if d.lastChannel <> invalid and type(d.lastChannel) = "roAssociativeArray" then out.lastChannel = d.lastChannel
@@ -51,7 +55,9 @@ function storageMigrate(d as object) as object
             if p <> invalid and p.url <> invalid and p.id <> invalid then
                 nm = p.name
                 if nm = invalid then nm = playlistNameFromUrl(p.url)
-                out.playlists.push({ id: p.id.ToStr(), name: nm.ToStr(), url: p.url.ToStr() })
+                pl = { id: p.id.ToStr(), name: nm.ToStr(), url: p.url.ToStr() }
+                if p.arch <> invalid and p.arch.t <> invalid then pl.arch = p.arch
+                out.playlists.push(pl)
             end if
         end for
     end if
@@ -129,4 +135,23 @@ function isValidUrl(s as string) as boolean
     if host.Len() < 3 then return false
     if host.Instr(".") < 0 and host.Instr(":") < 0 then return false
     return true
+end function
+
+' PIN is stored as a hash: the digits cannot be read back
+' PIN хранится как хеш: цифры из него не восстановить
+function pinHash(pin as string) as string
+    ba = CreateObject("roByteArray")
+    ba.FromAsciiString("shaga-iptv-player:" + pin)
+    dg = CreateObject("roEVPDigest")
+    dg.Setup("sha256")
+    return "h:" + dg.Process(ba)
+end function
+
+function pinIsSet(data as object) as boolean
+    return data.pin <> ""
+end function
+
+function pinMatches(data as object, pin as string) as boolean
+    if data.pin = "" or pin = "" then return false
+    return pinHash(pin) = data.pin
 end function

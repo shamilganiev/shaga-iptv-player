@@ -1,3 +1,4 @@
+// ShaGa IPTV Player for LG webOS — text.js
 // Перенесено из Roku-версии (source/textutil.brs, storage.brs, groups.brs) один к одному,
 // чтобы обе версии находили одни и те же каналы и называли плейлисты одинаково.
 var Text = {

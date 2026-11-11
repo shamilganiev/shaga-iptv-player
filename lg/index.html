@@ -1,8 +1,9 @@
 <!DOCTYPE html>
+<!-- ShaGa IPTV Player for LG webOS — index.html (version in appinfo.json) -->
 <html>
 <head>
 <meta charset="utf-8">
-<title>ShaGa Player</title>
+<title>ShaGa IPTV Player</title>
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
@@ -22,6 +23,7 @@
 
 <!-- Список каналов -->
 <section id="browser" class="screen">
+  <div id="topNow" class="top-now"></div>
   <div class="col-groups">
     <div class="col-head"><span id="gHead" class="h-text"></span></div>
     <div id="groupList"></div>
@@ -44,11 +46,16 @@
       <div id="iNext"></div>
     </div>
     <p id="iMsg" class="i-msg"></p>
+    <div id="progBox" style="display:none">
+      <div id="progList"></div>
+      <p id="progDesc" class="p-desc"></p>
+    </div>
   </div>
   <footer class="hints">
     <span class="hint"><b class="k">OK</b><span data-i18n="hintPlay"></span></span>
-    <span class="hint"><b class="k">&#9664; &#9654;</b><span data-i18n="hintPanels"></span></span>
+    <span class="hint"><b class="k">&#9664; &#9654;</b><span id="hintPanels" data-i18n="hintPanels"></span></span>
     <span class="hint"><b class="k">0&ndash;9</b><span data-i18n="hintNumber"></span></span>
+    <span class="hint"><b class="dot red"></b><span data-i18n="hintMenu"></span></span>
     <span class="hint"><b class="dot yellow"></b><span data-i18n="hintFav"></span></span>
     <span class="hint"><b class="dot blue"></b><span data-i18n="hintSettings"></span></span>
   </footer>
@@ -131,6 +138,7 @@
 <script src="js/m3u.js"></script>
 <script src="js/source.js"></script>
 <script src="js/epg.js"></script>
+<script src="js/catchup.js"></script>
 <script src="js/vlist.js"></script>
 <script src="js/dialogs.js"></script>
 <script src="js/player.js"></script>

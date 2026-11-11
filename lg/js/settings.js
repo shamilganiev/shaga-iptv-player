@@ -1,4 +1,6 @@
-// Настройки. Два режима: главный список и управление группами.
+// ShaGa IPTV Player for LG webOS — settings.js
+// Settings pages: main, playlist (archive), groups, log.
+// Настройки. Страницы: главная, «Плейлист» (архив), «Группы», журнал.
 var Settings = {
   el: null,
   mode: 'main',
@@ -24,30 +26,93 @@ var Settings = {
     this.draw();
   },
 
-  // ---------- Главный список ----------
+  // ---------- Главный список (порядок как в Roku) ----------
   buildMain: function () {
-    // Плейлисты и язык — служебные строки вверху левой колонки (как в Roku)
+    var pl = Playlists.byId(App.plId);
+    var plValue = pl ? pl.name + ' · ' + Lang.count(App.channels.length) + (App.plStale ? ' ' + t('staleShort') : '') : '';
     this.items = [
-      { label: t('sRefresh'), value: '', action: function () { Settings.refresh(); } },
-      { key: 'epg', label: t('sEpg'), value: Settings.epgStatus(), action: function () {
-          EPG.load(App.meta, App.channels, true);
-          Toast.show(t('epgLoading'));
-        } },
-      { key: 'groups', label: t('sGroups'), value: t('sGroupsValue'), action: function () { Settings.openGroups(); } },
+      { key: 'playlist', label: t('playlistRow') + ' >', value: plValue, action: function () { Settings.openPlaylistPage(); } },
       { label: t('sPin'), value: Config.d.pin ? t('sPinOn') : t('sPinOff'),
         action: function () { Settings.pinMenu(); } },
       { key: 'zap', label: t('sZap'), value: t(Config.d.zapInvert ? 'zapList' : 'zapClassic'),
         action: function () { Config.d.zapInvert = !Config.d.zapInvert; Config.save(); Settings.draw(); } },
+      { key: 'epg', label: t('sEpg'), value: Settings.epgStatus(), action: function () {
+          EPG.load(App.meta, App.channels, true);
+          Toast.show(t('epgLoading'));
+        } },
+      { key: 'groups', label: t('sGroups') + ' >', value: t('groupsValue', { n: App.groupOrder.length }),
+        action: function () { Settings.openGroups(); } },
       { key: 'engine', label: t('sEngine'), value: t(Config.d.engine === 'hlsjs' ? 'engHls' : 'engNative'),
         action: function () { Settings.toggleEngine(); } },
       { key: 'log', label: t('sLog'), value: t('sLogValue', { n: Log.buf.length }), action: function () { Settings.openLog(); } },
-      { label: t('sVersion'), value: App.version, action: null },
+      { key: 'about', label: t('aboutRow'), value: App.version, action: function () { Settings.showAbout(); } },
       { label: t('sClose'), value: '', action: function () { App.confirmExit(); } }
     ];
   },
 
+  // ---------- Страница «Плейлист»: плейлисты, обновление, архив ----------
+  buildPlaylistPage: function () {
+    var a = this.currentArchive();
+    this.items = [
+      { key: 'pls', label: t('svcPlaylists'), value: t('playlistsHint'), action: function () { App.openPlaylists(); } },
+      { key: 'refresh', label: t('sRefresh'), value: '', action: function () { Settings.refresh(); } },
+      { key: 'archT', label: t('archRow'), value: this.archTypeText(a.t), action: function () { Settings.openArchType(); } },
+      { key: 'archD', label: t('archDaysRow'), value: t('archDaysValue', { n: a.d }), action: function () { Settings.openArchDays(); } }
+    ];
+  },
+
+  openPlaylistPage: function () {
+    if (!Playlists.byId(App.plId)) { App.openPlaylists(); return; }
+    this.mode = 'playlist';
+    this.idx = 0;
+    this.draw();
+  },
+
+  // Настройка архива текущего плейлиста: { t: auto|shift|flussonic|xc|off, d: 1..7 }
+  currentArchive: function () {
+    var pl = Playlists.byId(App.plId), a = (pl && pl.arch) || {};
+    return { t: a.t || 'auto', d: a.d || 3 };
+  },
+
+  archTypeText: function (tp) {
+    return tp === 'auto' ? t('archAuto') : tp === 'off' ? t('archOff') : tp;
+  },
+
+  setArchive: function (tp, d) {
+    var pl = Playlists.byId(App.plId);
+    if (!pl) return;
+    pl.arch = { t: tp, d: d };
+    Config.save();
+    Log.info('Архив плейлиста id ' + pl.id + ': ' + tp + ', ' + d + ' дн.');
+    this.draw();
+  },
+
+  openArchType: function () {
+    var self = this, a = this.currentArchive(), types = ['auto', 'shift', 'flussonic', 'xc', 'off'];
+    Menu.open(t('archRow'), t('archMsg'), types.map(function (tp) {
+      return { label: self.archTypeText(tp), mark: tp === a.t, action: function () { self.setArchive(tp, a.d); } };
+    }).concat([{ label: t('cancel') }]), { focus: Math.max(0, types.indexOf(a.t)) });
+  },
+
+  openArchDays: function () {
+    var self = this, a = this.currentArchive(), items = [];
+    for (var d = 1; d <= 7; d++) {
+      (function (n) {
+        items.push({ label: t('archDaysValue', { n: n }), mark: n === a.d, action: function () { self.setArchive(a.t, n); } });
+      })(d);
+    }
+    items.push({ label: t('cancel') });
+    Menu.open(t('archDaysRow'), t('archDaysMsg'), items, { focus: a.d - 1 });
+  },
+
+  showAbout: function () {
+    Confirm.open('ShaGa IPTV Player', [{ label: t('ok') }], null,
+      t('aboutText', { v: t('sVersion') + ' ' + App.version }) + '\n\n' +
+      t('privacyLabel') + ' ' + App.PRIVACY_URL + '\n' + t('supportLabel') + ' ' + App.SUPPORT_URL);
+  },
+
   draw: function () {
-    var main = this.mode === 'main';
+    var main = this.mode === 'main' || this.mode === 'playlist';
     $('setList').style.display = main ? '' : 'none';
     $('setGroups').style.display = this.mode === 'groups' ? '' : 'none';
     $('setLog').style.display = this.mode === 'log' ? 'block' : 'none';
@@ -59,10 +124,12 @@ var Settings = {
       return;
     }
     if (main) {
-      $('setTitle').textContent = t('settings');
+      var pl = Playlists.byId(App.plId);
+      $('setTitle').textContent = this.mode === 'playlist' ? t('playlistRow') + (pl ? ': ' + pl.name : '') : t('settings');
       $('setSub').textContent = '';
       $('setSub').style.display = 'none';
-      this.buildMain();
+      if (this.mode === 'playlist') this.buildPlaylistPage(); else this.buildMain();
+      if (this.idx >= this.items.length) this.idx = 0;
       this.drawMain();
       this.glist.setActive(false);
     } else {
@@ -213,12 +280,13 @@ var Settings = {
       d.hidden = d.hidden.filter(function (x) { return x !== g; });
       d.locked = d.locked.filter(function (x) { return x !== g; });
       if (next === 'hidden') d.hidden.push(g);
-      if (next === 'locked') { d.locked.push(g); App.lockTouch[g] = Date.now(); }
+      if (next === 'locked') d.locked.push(g);
+      // PIN, введённый в настройках, ничего не открывает для просмотра
       if (App.openLocked === g) App.openLocked = null;
       Config.save();
       Log.info('Группа «' + g + '»: ' + st + ' → ' + next);
-      self.draw();
-      self.glist.render();
+      if (App.screen === Settings) { self.draw(); self.glist.render(); }
+      else App.refreshScreen();     // из контекстного меню главного экрана
     };
     if (!Config.d.pin && (weaker || next === 'locked')) {
       App.setNewPin(function () { self.pinOk = true; apply(); }, t('pinCreateFirst'));
@@ -261,7 +329,9 @@ var Settings = {
     if (code === K.UP) { this.idx = (this.idx - 1 + n) % n; this.drawMain(); }
     else if (code === K.DOWN) { this.idx = (this.idx + 1) % n; this.drawMain(); }
     else if (code === K.OK) this.activate();
+    else if (code === K.RIGHT && this.items[this.idx].label.slice(-2) === ' >') this.activate();
     else if ((code === K.LEFT || code === K.RIGHT) && /^(engine|zap)$/.test(this.items[this.idx].key || '')) this.activate();
+    else if (code === K.BACK && this.mode === 'playlist') { this.mode = 'main'; this.draw(); this.focusKey('playlist'); }
     else if (code === K.BACK || code === K.BLUE) App.show(this.returnTo, { fromPlayer: true });
     else return false;
     return true;

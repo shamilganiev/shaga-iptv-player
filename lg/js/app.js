@@ -1,10 +1,13 @@
-// Коды кнопок пульта LG. Для проверки в браузере на компьютере:
-// Esc = Back, PageUp/PageDown = CH+/CH−, Y = жёлтая, B = синяя.
+// ShaGa IPTV Player for LG webOS — app.js
+// App core: screens, playlists, PIN, remote keys / Ядро: экраны, плейлисты, PIN, пульт.
+// LG remote key codes. Desktop test: Esc = Back, PageUp/PageDown = CH+/CH-,
+// R = red (menu), Y = yellow, B = blue.
+// Коды кнопок пульта LG. Для проверки на компьютере: Esc = Back, R = красная (меню), Y = жёлтая, B = синяя.
 var K = {
   LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, OK: 13, BACK: 461,
   CHUP: 33, CHDN: 34,
   RED: 403, GREEN: 404, YELLOW: 405, BLUE: 406,
-  PLAY: 415, PAUSE: 19, STOP: 413
+  PLAY: 415, PAUSE: 19, STOP: 413, REW: 412, FF: 417
 };
 
 function digitOf(code) {
@@ -18,7 +21,10 @@ function isInput(el) {
 }
 
 var App = {
-  version: '0.4.0',
+  version: '1.3.0',
+  PRIVACY_URL: 'https://shamilganiev.github.io/shaga-iptv-player/privacy.html',
+  SUPPORT_URL: 'https://github.com/shamilganiev/shaga-iptv-player/issues',
+  MAX_FAV: 200,
   channels: [],
   groupOrder: [],    // группы в порядке появления в плейлисте
   groupMap: {},      // группа -> [каналы]
@@ -27,18 +33,20 @@ var App = {
   favSet: {},
   plId: null,        // плейлист, который сейчас показан
   plStale: false,    // показана сохранённая копия, обновить не удалось
+  loadErr: '',       // при запуске нет ни кэша, ни сети — текст ошибки в колонке каналов
   search: null,      // { q, list } — результаты поиска
   screens: {},
   screen: null,
   prev: null,
-  openLocked: null,  // группа «Под PIN-кодом», для которой сейчас введён PIN (одна)
-  lockTouch: {},     // группа -> когда её последний раз смотрели (для автоскрытия через 10 мин)
+  // PIN flag: one group, for which the PIN was entered. The group mode itself never changes.
+  // Флаг PIN: одна группа, для которой введён PIN. Сам режим группы не меняется.
+  // Сбрасывается: старт канала из ДРУГОЙ группы; 10 мин ничего не играет; запуск/сворачивание.
+  openLocked: null,
+  lockTouch: {},     // группа -> с какого момента считать 10 минут (стоп или ввод PIN)
   LOCK_IDLE_MS: 10 * 60 * 1000,
 
   init: function () {
     Config.load();
-    // «Под PIN-кодом» не переживает перезапуск
-    this.hideAllLocked('запуск');
     Lang.set(Lang.resolve(Config.d.lang));
     this.applyI18n();
 
@@ -54,7 +62,7 @@ var App = {
     document.addEventListener('keydown', function (e) { App.onKey(e); }, true);
     document.addEventListener('visibilitychange', function () {
       var visible = !document.hidden;
-      if (!visible) { App.hideAllLocked('сворачивание'); App.openLocked = null; }
+      if (!visible && App.openLocked !== null) { Log.info('PIN: флаг группы сброшен (сворачивание)'); App.openLocked = null; }
       Player.onVisibility(visible);
       if (visible) App.refreshScreen();
     });
@@ -71,6 +79,7 @@ var App = {
 
   start: function () {
     var self = this, d = Config.d;
+    Log.info('===== ShaGa IPTV Player ' + this.version + ' =====');
     Log.info('Версия ' + this.version + ', язык ' + Lang.cur + (d.lang ? '' : ' (авто)') + ', движок ' + d.engine +
       ', hls.js ' + (window.Hls ? Hls.version + (Hls.isSupported() ? '' : ' (не поддерж.)') : 'нет') +
       ', плейлистов ' + d.playlists.length);
@@ -107,7 +116,13 @@ var App = {
       }).catch(function (err) {
         Busy.hide();
         Log.error('Плейлист «' + pl.name + '» не загрузился, кэша нет');
-        if (self.plId === null) self.show('browser');   // при запуске показываем пустой список
+        // При запуске (как в Roku) — текст ошибки в колонке каналов, без окна
+        if (opts.startup && self.plId === null) {
+          self.loadErr = self.errText(err) + ' ' + t('errHint');
+          self.show('browser');
+          return;
+        }
+        if (self.plId === null) self.show('browser');
         self.showLoadError(err);
       });
     });
@@ -140,6 +155,7 @@ var App = {
     if (this.plId !== pl.id && Player.ch) Player.stop();
     this.plId = pl.id;
     this.plStale = false;
+    this.loadErr = '';
     this.search = null;
     this.openLocked = null;
     this.hideAdultGroups(res.channels);
@@ -409,6 +425,7 @@ var App = {
   toggleFav: function (ch) {
     var f = Config.d.favorites, i = f.indexOf(ch.name);
     if (i >= 0) { f.splice(i, 1); Toast.show(t('favRemoved', { name: ch.name })); }
+    else if (f.length >= this.MAX_FAV) { Toast.show(t('favLimit', { n: this.MAX_FAV }), 4000); return; }
     else { f.push(ch.name); Toast.show(t('favAdded', { name: ch.name })); }
     Config.save();
     this.rebuildFavSet();
@@ -526,20 +543,14 @@ var App = {
     Log.info('PIN: открыта группа «' + g + '»');
   },
 
-  // Закрыть открытую группу, если из неё ушли (и её канал сейчас не играет)
-  relockIfLeft: function (currentGid) {
-    var g = this.openLocked;
-    if (g === null || currentGid === g) return;
-    if (Player.ch && Player.ch.group === g && Player.state !== 'idle') return;
-    this.lockTouch[g] = Date.now();
-    this.openLocked = null;
+  // Группу «смотрят»: её канал играет (пауза — тоже просмотр)
+  isLockActive: function (g) {
+    return this.openLocked === g && !!Player.ch && Player.ch.group === g && Player.state !== 'idle';
   },
 
-  // Группу «смотрят»: открыта PIN-кодом и (играет её канал или она выбрана в списке)
-  isLockActive: function (g) {
-    if (this.openLocked !== g) return false;
-    if (Player.ch && Player.ch.group === g && Player.state !== 'idle') return true;
-    return this.screen === Browser && Browser.gid === g;
+  // Канал остановили — 10 минут считаются с этого момента
+  touchLock: function () {
+    if (this.openLocked !== null) this.lockTouch[this.openLocked] = Date.now();
   },
 
   hideGroup: function (g, why) {
@@ -557,20 +568,21 @@ var App = {
     Config.d.locked.slice().forEach(function (g) { self.hideGroup(g, why); });
   },
 
-  // Раз в 30 с: группы «Под PIN-кодом», которые не смотрят 10 минут, становятся скрытыми
+  // Раз в 30 с: если 10 минут ничего не играет — флаг PIN сбрасывается (режим «По PIN» остаётся)
   checkLocks: function () {
-    var self = this, now = Date.now(), changed = false;
-    Config.d.locked.slice().forEach(function (g) {
-      if (self.isLockActive(g)) { self.lockTouch[g] = now; return; }
-      if (!self.lockTouch[g]) self.lockTouch[g] = now;
-      if (now - self.lockTouch[g] >= self.LOCK_IDLE_MS) { self.hideGroup(g, '10 минут без просмотра'); changed = true; }
-    });
-    if (changed) this.refreshScreen();
+    var g = this.openLocked, now = Date.now();
+    if (g === null) return;
+    if (this.isLockActive(g)) { this.lockTouch[g] = now; return; }
+    if (!this.lockTouch[g]) this.lockTouch[g] = now;
+    if (now - this.lockTouch[g] < this.LOCK_IDLE_MS) return;
+    this.openLocked = null;
+    Log.info('PIN: флаг группы «' + g + '» сброшен (10 минут без просмотра)');
+    this.refreshScreen();
   },
 
   // Перерисовать текущий экран после смены замков
   refreshScreen: function () {
-    if (Player.ch && this.isHidden(Player.ch.group)) {
+    if (Player.ch && (this.isHidden(Player.ch.group) || !this.isOpen(Player.ch.group))) {
       Player.stop();
       if (this.screen === Player) this.show('browser');
     }
@@ -618,7 +630,8 @@ var App = {
     var inInput = isInput(e.target);
     if (code === 27 || (code === 8 && !inInput)) code = K.BACK;
     if (!inInput) {
-      if (code === 89) code = K.YELLOW;
+      if (code === 82) code = K.RED;
+      else if (code === 89) code = K.YELLOW;
       else if (code === 66) code = K.BLUE;
     }
 

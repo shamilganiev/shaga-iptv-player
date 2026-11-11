@@ -1,3 +1,4 @@
+// ShaGa IPTV Player for LG webOS — source.js
 // Слой «откуда берётся плейлист». Сейчас только { type: 'url' }.
 // QR-передача добавится сюда же отдельным type, остальной код не изменится.
 var Source = {

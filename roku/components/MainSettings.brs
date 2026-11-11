@@ -2,15 +2,21 @@
 ' ShaGa IPTV Player — бесплатный плеер для собственных плейлистов M3U/M3U8
 '
 ' Settings (shown in the channel column) and the PIN code.
-' Rows: PIN code, Channel switching, every group of the playlist, Close the app.
-' OK on a group opens a small window: shown / locked with PIN / hidden.
-' The PIN is asked only to WEAKEN protection (hidden -> anything, PIN -> shown),
-' once per visit to Settings. A PIN entered here opens nothing for viewing.
+' Pages (m.settingsPage):
+'   "main"     — Playlist ->, PIN code, Channel switching, TV guide, Groups ->, About, Close the app
+'   "playlist" — Playlists (change / add / edit), Archive type, Archive depth
+'   "groups"   — every group of the playlist; OK opens: shown / locked with PIN / hidden
+' Back in a sub-page returns to the main page. The PIN is asked only to WEAKEN
+' protection (hidden -> anything, PIN -> shown), once per visit to Groups.
+' A PIN entered here opens nothing for viewing.
 ' Настройки (в колонке каналов) и PIN-код.
-' Строки: PIN-код, Переключение каналов, все группы плейлиста, Закрыть приложение.
-' OK на группе открывает окно: показана / по PIN-коду / скрыта.
-' PIN спрашивается только для ОСЛАБЛЕНИЯ защиты (скрыта -> любое, PIN -> показана),
-' один раз за заход в Настройки. PIN, введённый здесь, ничего не открывает для просмотра.
+' Страницы (m.settingsPage):
+'   "main"     — Плейлист ->, PIN-код, Переключение каналов, Программа передач, Группы ->, О приложении, Закрыть
+'   "playlist" — Плейлисты (сменить / добавить / изменить), Тип архива, Глубина архива
+'   "groups"   — все группы плейлиста; OK открывает: показана / по PIN-коду / скрыта
+' «Назад» в подстранице возвращает на главную. PIN спрашивается только для ОСЛАБЛЕНИЯ
+' защиты (скрыта -> любое, PIN -> показана), один раз за заход в «Группы».
+' PIN, введённый здесь, ничего не открывает для просмотра.
 '
 ' Forgotten PIN: the master code (isMasterPin in groups.brs) only resets it.
 ' Забытый PIN: мастер-код (isMasterPin в groups.brs) только сбрасывает его.
@@ -21,6 +27,7 @@ end sub
 
 sub enterSettings(focusRow as integer)
     m.view = "settings"
+    m.settingsPage = "main"
     m.settingsPinOk = false
     showMessage("", false)
     clearPreview()
@@ -30,11 +37,25 @@ sub enterSettings(focusRow as integer)
     dbg("UI", "settings opened")
 end sub
 
+' Back inside Settings: sub-page -> main page; returns false on the main page
+' «Назад» в Настройках: подстраница -> главная; на главной возвращает false
+function settingsBack() as boolean
+    if m.view <> "settings" or m.settingsPage = "main" then return false
+    row = 0
+    if m.settingsPage = "groups" then row = 4
+    m.settingsPage = "main"
+    m.settingsPinOk = false
+    buildSettingsRows(row)
+    updateChanHeader()
+    return true
+end function
+
 ' Back to channels; group modes may have changed, so rebuild categories
 ' Обратно к каналам; режимы групп могли измениться — перестраиваем категории
 sub leaveSettings(rebuild as boolean)
     if m.view <> "settings" then return
     m.view = "channels"
+    m.settingsPage = "main"
     m.settingsPinOk = false
     m.settingsRows = []
     if not rebuild or m.channels = invalid then
@@ -55,33 +76,62 @@ sub leaveSettings(rebuild as boolean)
     dbg("UI", "settings closed")
 end sub
 
+function settingsRow(title as string, value as string) as object
+    return { title: title, HDPosterUrl: "", shortDescriptionLine1: "", shortDescriptionLine2: value }
+end function
+
 sub buildSettingsRows(focusRow as integer)
-    m.settingsRows = [{ kind: "pin" }, { kind: "zap" }, { kind: "epg" }]
-    pinText = m.S.pinNotSet
-    if m.data.pin <> "" then pinText = m.S.pinIsSet
-    zapText = m.S.zapList
-    if m.data.zapMode = "classic" then zapText = m.S.zapClassic
-    items = [
-        { title: m.S.pinRow, HDPosterUrl: "", shortDescriptionLine1: "", shortDescriptionLine2: pinText }
-        { title: m.S.zapRow, HDPosterUrl: "", shortDescriptionLine1: "", shortDescriptionLine2: zapText }
-        { title: m.S.epgRow, HDPosterUrl: "", shortDescriptionLine1: "", shortDescriptionLine2: epgStatusText() }
-    ]
-    if m.groups <> invalid then
-        for gi = 0 to m.groups.Count() - 1
-            m.settingsRows.push({ kind: "group", gi: gi })
-            items.push({ title: groupTitle(gi), HDPosterUrl: "", shortDescriptionLine1: "", shortDescriptionLine2: modeText(groupMode(m.data, m.groups[gi].name)) })
-        end for
+    items = []
+    m.settingsRows = []
+    if m.settingsPage = "playlist" then
+        arch = currentArchive()
+        m.settingsRows = [{ kind: "playlists" }, { kind: "archType" }]
+        items.push(settingsRow(m.S.playlistsTitle, m.S.playlistsHint))
+        items.push(settingsRow(m.S.archRow, archTypeText(arch.t)))
+        if arch.t <> "auto" and arch.t <> "off" then
+            m.settingsRows.push({ kind: "archDays" })
+            items.push(settingsRow(m.S.archDaysRow, m.S.archDaysValue.Replace("{n}", arch.d.ToStr())))
+        end if
+    else if m.settingsPage = "groups" then
+        if m.groups <> invalid then
+            for gi = 0 to m.groups.Count() - 1
+                m.settingsRows.push({ kind: "group", gi: gi })
+                items.push(settingsRow(groupTitle(gi), modeText(groupMode(m.data, m.groups[gi].name))))
+            end for
+        end if
+    else
+        pinText = m.S.pinNotSet
+        if pinIsSet(m.data) then pinText = m.S.pinIsSet
+        zapText = m.S.zapList
+        if m.data.zapMode = "classic" then zapText = m.S.zapClassic
+        nGroups = 0
+        if m.groups <> invalid then nGroups = m.groups.Count()
+        m.settingsRows = [{ kind: "playlist" }, { kind: "pin" }, { kind: "zap" }, { kind: "epg" }, { kind: "groups" }, { kind: "about" }, { kind: "close" }]
+        items.push(settingsRow(m.S.playlistRow + " >", playlistRowText()))
+        items.push(settingsRow(m.S.pinRow, pinText))
+        items.push(settingsRow(m.S.zapRow, zapText))
+        items.push(settingsRow(m.S.epgRow, epgStatusText()))
+        items.push(settingsRow(m.S.groupsRow + " >", m.S.groupsValue.Replace("{n}", nGroups.ToStr())))
+        items.push(settingsRow(m.S.aboutRow, appTitleVersion()))
+        items.push(settingsRow(m.S.closeApp, ""))
     end if
-    m.settingsRows.push({ kind: "about" })
-    items.push({ title: m.S.aboutRow, HDPosterUrl: "", shortDescriptionLine1: "", shortDescriptionLine2: appTitleVersion() })
-    m.settingsRows.push({ kind: "close" })
-    items.push({ title: m.S.closeApp, HDPosterUrl: "", shortDescriptionLine1: "", shortDescriptionLine2: "" })
     root = CreateObject("roSGNode", "ContentNode")
     root.Update({ children: items }, true)
     m.chanList.content = root
     if focusRow < 0 or focusRow >= items.Count() then focusRow = 0
     m.chanList.jumpToItem = focusRow
 end sub
+
+' "only4.tv · list.m3u8 · 2796 channels" (+ saved copy note) / имя, число каналов, пометка копии
+function playlistRowText() as string
+    t = playlistLabelText()
+    if t = "" then
+        i = storageFindIndex(m.data, m.currentId)
+        if i >= 0 then t = m.data.playlists[i].name
+    end if
+    if m.playlistStale then t = t + "  ·  " + m.S.fromCache
+    return t
+end function
 
 function groupTitle(gi as integer) as string
     g = m.groups[gi]
@@ -99,8 +149,21 @@ end function
 sub onSettingsRowSelected(p as integer)
     if p < 0 or p >= m.settingsRows.Count() then return
     row = m.settingsRows[p]
-    if row.kind = "pin" then
-        if m.data.pin = "" then
+    if row.kind = "playlist" then
+        m.settingsPage = "playlist"
+        buildSettingsRows(0)
+    else if row.kind = "groups" then
+        m.settingsPage = "groups"
+        m.settingsPinOk = false      ' PIN once per visit to Groups / PIN один раз за заход в «Группы»
+        buildSettingsRows(0)
+    else if row.kind = "playlists" then
+        openPlaylistsDialog()
+    else if row.kind = "archType" then
+        openArchTypeDialog()
+    else if row.kind = "archDays" then
+        openArchDaysDialog()
+    else if row.kind = "pin" then
+        if not pinIsSet(m.data) then
             startPinCreate({ action: "none", row: p })
         else
             showDialog(newMessageDialog(m.S.pinRow, [" "], [m.S.pinChange, m.S.pinRemove, m.S.cancel]), "pinMenu", invalid)
@@ -120,6 +183,78 @@ sub onSettingsRowSelected(p as integer)
         showInfoDialog(m.S.aboutRow, [m.S.aboutText.Replace("{v}", appTitleVersion()), m.S.privacyLabel + " " + cfg.privacyUrl, m.S.supportLabel + " " + cfg.supportContact])
     else if row.kind = "close" then
         openExitDialog()
+    end if
+end sub
+
+' ---------- archive settings of the current playlist / архив текущего плейлиста ----------
+' Stored per playlist: arch = { t: "auto"|"off"|"shift"|"flussonic"|"xc", d: days }.
+' "auto" = from the playlist's catchup attributes; other types apply to all its channels.
+' Хранится у плейлиста: arch = { t, d }. "auto" — из атрибутов catchup плейлиста;
+' остальные типы действуют на все его каналы.
+
+function currentArchive() as object
+    i = storageFindIndex(m.data, m.currentId)
+    if i >= 0 and m.data.playlists[i].arch <> invalid then return m.data.playlists[i].arch
+    return { t: "auto", d: 3 }
+end function
+
+function archTypeText(t as string) as string
+    if t = "off" then return m.S.archOff
+    if t = "shift" then return "shift"
+    if t = "flussonic" then return "Flussonic"
+    if t = "xc" then return "Xtream (timeshift)"
+    return m.S.archAuto
+end function
+
+sub openArchTypeDialog()
+    types = ["auto", "shift", "flussonic", "xc", "off"]
+    cur = currentArchive().t
+    buttons = []
+    curIdx = 0
+    for i = 0 to types.Count() - 1
+        if types[i] = cur then
+            curIdx = i
+            buttons.push("* " + archTypeText(types[i]))
+        else
+            buttons.push("   " + archTypeText(types[i]))
+        end if
+    end for
+    buttons.push(m.S.cancel)
+    dlg = newMessageDialog(m.S.archRow, [m.S.archMsg], buttons)
+    focusButton(dlg, curIdx)
+    showDialog(dlg, "archType", types)
+end sub
+
+sub openArchDaysDialog()
+    cur = currentArchive().d
+    buttons = []
+    for d = 1 to 7
+        mark = "   "
+        if d = cur then mark = "* "
+        buttons.push(mark + m.S.archDaysValue.Replace("{n}", d.ToStr()))
+    end for
+    buttons.push(m.S.cancel)
+    dlg = newMessageDialog(m.S.archDaysRow, [m.S.archDaysMsg], buttons)
+    focusButton(dlg, cur - 1)
+    showDialog(dlg, "archDays", invalid)
+end sub
+
+sub setArchive(t as string, d as integer)
+    i = storageFindIndex(m.data, m.currentId)
+    if i < 0 then return
+    m.data.playlists[i].arch = { t: t, d: d }
+    storageSave(m.data)
+    dbg("UI", "archive " + t + " " + d.ToStr() + " days for " + m.currentId)
+    if m.view = "settings" then buildSettingsRows(1)
+end sub
+
+sub onArchDialogButton(kind as string, b as integer, ctx as dynamic)
+    closeDialog()
+    arch = currentArchive()
+    if kind = "archType" then
+        if b >= 0 and b < ctx.Count() then setArchive(ctx[b], arch.d)
+    else if kind = "archDays" then
+        if b >= 0 and b < 7 then setArchive(arch.t, b + 1)
     end if
 end sub
 
@@ -160,7 +295,7 @@ sub onGroupModeButton(b as integer, ctx as object)
     if modeStrength(newMode) > modeStrength(cur) then
         ' Stronger: no PIN, but "PIN" mode needs a PIN to exist
         ' Усиление: PIN не нужен, но для режима «по PIN» он должен быть задан
-        if newMode = "p" and m.data.pin = "" then
+        if newMode = "p" and not pinIsSet(m.data) then
             startPinCreate(after)
         else
             closeDialog()
@@ -172,7 +307,7 @@ sub onGroupModeButton(b as integer, ctx as object)
         if m.settingsPinOk then
             closeDialog()
             applyGroupMode(gi, newMode, ctx.row)
-        else if m.data.pin = "" then
+        else if not pinIsSet(m.data) then
             startPinCreate(after)
         else
             openPinCheck(after)
@@ -188,7 +323,15 @@ sub applyGroupMode(gi as integer, mode as string, row as integer)
     if m.openGroup <> invalid and mode <> "p" then
         if m.openGroup = name then m.openGroup = invalid
     end if
-    if m.view = "settings" then buildSettingsRows(row)
+    if m.view = "settings" then
+        buildSettingsRows(row)
+    else if m.channels <> invalid then
+        ' Changed from the * menu on the main screen / Изменено из меню * на главном экране
+        cur = m.curCat
+        buildCategories(m.catList.itemFocused)
+        m.curCat = -1
+        if cur >= 0 and cur < m.cats.Count() and m.cats[cur].kind <> "action" then showCategory(cur)
+    end if
 end sub
 
 ' ---------- PIN dialogs / окна PIN-кода ----------
@@ -222,7 +365,7 @@ sub onPinDialogButton(kind as string, b as integer, ctx as dynamic)
     if kind = "pinCheck" then
         if b <> 0 then
             closeDialog()
-        else if m.data.pin <> "" and pin = m.data.pin then
+        else if pinMatches(m.data, pin) then
             dbg("UI", "PIN accepted for " + ctx.action)
             closeDialog()
             doAfterPin(ctx)
@@ -257,7 +400,7 @@ sub onPinDialogButton(kind as string, b as integer, ctx as dynamic)
         else
             ' New PIN: opens nothing for viewing; counts as entered for this Settings visit
             ' Новый PIN: для просмотра ничего не открывает; в этом заходе в Настройки считается введённым
-            m.data.pin = pin
+            m.data.pin = pinHash(pin)
             m.pinFirst = ""
             m.settingsPinOk = true
             storageSave(m.data)

@@ -1,12 +1,16 @@
-// Экран списка: группы слева, каналы справа.
+// ShaGa IPTV Player for LG webOS — browser.js
+// Main screen: groups, channels, info column with the programme list.
+// Главный экран: группы, каналы, третья колонка с программой канала.
 var Browser = {
   el: null,
   groups: null,      // VList групп
   chans: null,       // VList каналов
-  panel: 'groups',
+  progs: null,       // VList программы канала (третья колонка)
+  panel: 'groups',   // groups | channels | prog
   groupItems: [],
   gid: '__all',
   memory: {},        // gid -> на каком канале стояли в этой группе
+  progCh: null,      // канал, чья программа открыта в третьей колонке
   acceptsDigits: true,
 
   init: function () {
@@ -26,7 +30,15 @@ var Browser = {
       render: this.renderChannel,
       onMove: function (i) { self.memory[self.gid] = i; self.scheduleInfo(); },
       onActivate: function (i) { App.playFrom(self.chans.items, i, self.gid); },
-      onPointer: function () { self.focusPanel('channels'); }
+      onPointer: function () { if (self.panel === 'prog') self.closeGuide(); self.focusPanel('channels'); }
+    });
+
+    this.progs = new VList($('progList'), {
+      rowH: 62,
+      render: this.renderProg,
+      onMove: function () { self.drawProgDesc(); },
+      onActivate: function (i) { self.actOnProgramme(self.progs.items[i]); },
+      onPointer: function () { self.focusPanel('prog'); }
     });
   },
 
@@ -40,7 +52,8 @@ var Browser = {
     }
     row._g.name.textContent = g.name;
     row._g.lock.style.display = g.locked ? '' : 'none';
-    row._g.count.textContent = g.svc || g.closed ? '' : g.count;
+    // Группа «По PIN»: без счётчика (как в Roku — «[PIN]» вместо числа)
+    row._g.count.textContent = g.svc ? '' : g.locked ? '[PIN]' : g.count;
     row.classList.toggle('svc', !!g.svc);
   },
 
@@ -77,27 +90,51 @@ var Browser = {
     row.classList.toggle('playing', Player.isCurrent(ch));
   },
 
-  // ---------- Заголовки колонок ----------
-  // Группы — выделенная группа. Каналы — «Вы смотрите: …», если играет, иначе выделенный.
-  // Третья колонка — передача, которая идёт на играющем канале, иначе — на выделенном.
+  // Строка программы: «> » у текущей, «вчера »/«завтра » у другого дня
+  renderProg: function (row, p) {
+    if (!row._p) {
+      row.classList.add('p-row');
+      row.innerHTML = '<span class="p-time"></span><span class="p-title"></span>';
+      row._p = { time: row.children[0], title: row.children[1] };
+    }
+    var now = Date.now(), cur = p.s <= now && now < p.e;
+    row._p.time.textContent = (cur ? '> ' : '') + Browser.dayPrefix(p.s) + EPG.hm(p.s);
+    row._p.title.textContent = p.t;
+    row.classList.toggle('past', p.e <= now);
+    row.classList.toggle('cur', cur);
+  },
+
+  dayPrefix: function (ms) {
+    var a = new Date(ms), b = new Date();
+    var da = a.getFullYear() * 400 + a.getMonth() * 32 + a.getDate();
+    var db = b.getFullYear() * 400 + b.getMonth() * 32 + b.getDate();
+    if (da === db) return '';
+    return (da < db ? t('yesterday') : t('tomorrow')) + ' ';
+  },
+
+  // ---------- Заголовки ----------
+  // Верхняя строка — «Вы смотрите: канал» (эфир или архив).
+  // Над каналами — канал под курсором. Над третьей колонкой — передача играющего канала
+  // («Архив: …» для архива), иначе — канала под курсором.
   drawHeads: function () {
     var g = this.groupItems[this.groups.index];
     $('gHead').textContent = g ? g.name : '';
 
     var cur = this.chans.items.length ? this.chans.current() : null;
     var playing = Player.ch && Player.state !== 'idle' ? Player.ch : null;
-    var ch = $('cHead');
-    ch.innerHTML = '';
+    var top = $('topNow');
+    top.innerHTML = '';
     if (playing) {
       var pre = document.createElement('span');
       pre.className = 'h-pre';
       pre.textContent = t('watching');
-      ch.appendChild(pre);
-      ch.appendChild(document.createTextNode(playing.name));
-    } else if (cur) {
-      ch.textContent = cur.name;
+      top.appendChild(pre);
+      top.appendChild(document.createTextNode(playing.name));
     }
+    $('cHead').textContent = cur ? cur.name : '';
 
+    if (this.panel === 'prog' && this.progCh) { $('iHead').textContent = this.progCh.name; return; }
+    if (playing && Player.arch) { $('iHead').textContent = t('archLabel') + ': ' + Player.arch.t; return; }
     var src = playing || cur, p = src ? EPG.now(src) : null;
     $('iHead').textContent = p ? p.t : (src ? src.name : '');
   },
@@ -113,6 +150,7 @@ var Browser = {
   },
 
   drawInfo: function () {
+    if (this.panel === 'prog') { this.drawHeads(); return; }   // открыт список передач
     var ch = this.chans.items.length ? this.chans.current() : null;
     var panel = $('infoPanel');
     panel.style.visibility = ch ? '' : 'hidden';
@@ -157,18 +195,156 @@ var Browser = {
   refreshEpg: function () {
     if (App.screen !== this) return;
     this.chans.render();
+    if (this.panel === 'prog') this.progs.render();
     this.drawInfo();
+  },
+
+  // ---------- Программа канала (вправо из списка каналов) ----------
+  openGuide: function (ch) {
+    var list = EPG.all(ch);
+    if (!list.length) { Toast.show(EPG.state === 'ready' ? t('epgNone') : t('epgLoading')); return; }
+    this.progCh = ch;
+    var now = Date.now(), at = 0;
+    for (var i = 0; i < list.length; i++) { if (list[i].s <= now) at = i; else break; }
+    this.showGuideNodes(true);
+    this.progs.setItems(list, at);
+    this.focusPanel('prog');
+    this.drawProgDesc();
+    this.drawHeads();
+  },
+
+  closeGuide: function () {
+    if (this.panel !== 'prog' && !this.progCh) return;
+    this.progCh = null;
+    this.showGuideNodes(false);
+    this.focusPanel('channels');
+    this.drawInfo();
+  },
+
+  showGuideNodes: function (on) {
+    $('progBox').style.display = on ? '' : 'none';
+    $('iCh').style.display = on ? 'none' : '';
+    $('iNowBox').style.display = on ? 'none' : '';
+    $('iMsg').style.display = on ? 'none' : $('iMsg').style.display;
+    $('infoPanel').style.visibility = '';
+  },
+
+  drawProgDesc: function () {
+    var p = this.progs.current();
+    $('progDesc').textContent = p ? (EPG.hm(p.s) + ' – ' + EPG.hm(p.e) + (p.d ? '   ' + p.d : '')) : '';
+  },
+
+  // OK на передаче: идёт сейчас — эфир; прошла — архив (если есть); будущая — описание
+  actOnProgramme: function (p) {
+    var ch = this.progCh;
+    if (!p || !ch) return;
+    var now = Date.now();
+    if (p.s <= now && now < p.e) { this.playLive(ch); return; }
+    if (p.e <= now) { this.playFromArchive(ch, p); return; }
+    this.showDescription(p);
+  },
+
+  // Канал в текущем списке (для CH+/CH−); если его там нет — во «Всех каналах»
+  listWith: function (ch) {
+    var items = this.chans.items, i = items.indexOf(ch);
+    if (i >= 0) return { list: items, idx: i, gid: this.gid };
+    var all = App.listFor('__all');
+    return { list: all, idx: all.indexOf(ch), gid: '__all' };
+  },
+
+  playLive: function (ch) {
+    var w = this.listWith(ch);
+    if (w.idx < 0) return;
+    App.playFrom(w.list, w.idx, w.gid);
+  },
+
+  playFromArchive: function (ch, p) {
+    var pl = Playlists.byId(App.plId), info = Catchup.info(ch, pl && pl.arch);
+    var now = Math.floor(Date.now() / 1000);
+    if (!Catchup.covers(info, Math.floor(p.s / 1000), now)) {
+      Confirm.open(p.t, [{ label: t('ok') }], null, t('archUnavailable'));
+      return;
+    }
+    var w = this.listWith(ch);
+    if (w.idx < 0) return;
+    App.guardPlay(ch, function () {
+      if (Player.playArchive(w.list, w.idx, w.gid, p, 0)) App.show('player');
+    });
+  },
+
+  showDescription: function (p) {
+    Confirm.open(p.t, [{ label: t('ok') }], null,
+      EPG.hm(p.s) + ' – ' + EPG.hm(p.e) + '. ' + (p.d || t('noDesc')));
+  },
+
+  // ---------- Контекстное меню (красная кнопка; на Roku — «*») ----------
+  openContextMenu: function () {
+    var self = this, items = [], now = Date.now();
+    if (this.panel === 'prog') {
+      var p = this.progs.current();
+      if (!p) return;
+      items.push({ label: t('ctxDesc'), action: function () { self.showDescription(p); } });
+      if (p.s <= now) items.push({ label: t('ctxWatch'), action: function () { self.actOnProgramme(p); } });
+      items.push({ label: t('cancel') });
+      Menu.open(p.t, '', items);
+      return;
+    }
+    if (this.panel === 'channels') {
+      if (!this.chans.items.length) return;
+      var ch = this.chans.current(), cur = EPG.now(ch);
+      items.push({ label: t(App.isFav(ch) ? 'ctxFavRemove' : 'ctxFavAdd'),
+                   action: function () { App.toggleFav(ch); self.refreshCounts(); } });
+      items.push({ label: t('ctxDesc'), action: function () {
+        if (cur) self.showDescription(cur);
+        else Confirm.open(ch.name, [{ label: t('ok') }], null, t('noDesc'));
+      } });
+      items.push({ label: t('ctxGuide'), action: function () { self.openGuide(ch); } });
+      var pl = Playlists.byId(App.plId);
+      if (cur && Catchup.covers(Catchup.info(ch, pl && pl.arch), Math.floor(cur.s / 1000), Math.floor(now / 1000))) {
+        items.push({ label: t('ctxFromStart'), action: function () { self.playFromArchive(ch, cur); } });
+      }
+      if (!App.groupMap[this.gid]) {
+        items.push({ label: t('ctxGoGroup'), action: function () { self.goToChannelGroup(ch); } });
+      }
+      items.push({ label: t('cancel') });
+      Menu.open(ch.name, '', items);
+      return;
+    }
+    // Группа: «Закрыть PIN-кодом» (если показана) и «Скрыть» — усиление защиты, PIN не нужен
+    var g = this.groupItems[this.groups.index];
+    if (!g || g.svc || !App.groupMap[g.id]) return;
+    if (Settings.groupState(g.id) === 'visible') {
+      items.push({ label: t('ctxLock'), action: function () { Settings.setGroupState(g.id, 'locked'); } });
+    }
+    items.push({ label: t('ctxHide'), action: function () { Settings.setGroupState(g.id, 'hidden'); } });
+    items.push({ label: t('cancel') });
+    Menu.open(g.name, '', items);
+  },
+
+  goToChannelGroup: function (ch) {
+    var gi = this.indexOfGroup(ch.group);
+    if (gi < 0) return;
+    var self = this;
+    var go = function () {
+      self.groups.setIndex(gi);
+      self.openGroup(gi);
+      var i = self.chans.items.indexOf(ch);
+      if (i >= 0) { self.chans.setIndex(i); self.memory[self.gid] = i; }
+      self.focusPanel('channels');
+      self.scheduleInfo();
+    };
+    if (App.isOpen(ch.group)) go();
+    else App.askPin(function () { App.unlockGroup(ch.group); go(); });
   },
 
   // ---------- Данные ----------
   // Вверху — служебные строки, как в Roku: «> Поиск», «> Плейлисты», «> Язык», «> Настройки».
   // Затем «Поиск: …» (если был поиск), «Избранное», «Все каналы», группы.
+  // Название плейлиста — в Настройках (строка «Плейлист»).
   buildGroups: function () {
-    var pl = Playlists.byId(App.plId);
-    var plName = t('svcPlaylists') + (pl ? ' · ' + pl.name : '') + (App.plStale ? ' ' + t('staleShort') : '');
     var items = [
       { id: '__svc_search', svc: true, name: '> ' + t('svcSearch'), action: function () { App.openSearch(); } },
-      { id: '__svc_playlists', svc: true, name: '> ' + plName, action: function () { App.openPlaylists(); } },
+      { id: '__svc_playlists', svc: true, name: '> ' + t('svcPlaylists'), action: function () { App.openPlaylists(); } },
       { id: '__svc_lang', svc: true, name: '> ' + t('svcLanguage'), action: function () { App.openLanguage(); } },
       { id: '__svc_settings', svc: true, name: '> ' + t('svcSettings'), action: function () { App.show('settings'); } }
     ];
@@ -194,11 +370,13 @@ var Browser = {
     return -1;
   },
 
+  // Курсор на группе. Уход курсора из открытой PIN-кодом группы — ещё не «уход»:
+  // флаг сбрасывается только при старте канала из другой группы (Player.start).
   openGroup: function (i) {
     var g = this.groupItems[i];
     if (!g) return;
     if (g.svc) { this.drawHeads(); return; }   // служебная строка — список каналов не меняем
-    App.relockIfLeft(g.id);           // ушли из открытой PIN-кодом группы — она снова закрыта
+    if (this.panel === 'prog') { this.progCh = null; this.showGuideNodes(false); }
     g.closed = g.locked && !App.isOpen(g.id);
     this.groups.render();
     this.gid = g.id;
@@ -206,8 +384,9 @@ var Browser = {
     this.chans.setItems(items, this.memory[g.id] || 0);
     this.drawHeads();
     var empty = $('chanEmpty');
-    empty.textContent = g.closed ? t('lockedGroup') : g.id === '__fav' ? t('emptyFav') : t('emptyGroup');
-    empty.classList.toggle('on', items.length === 0);
+    // Закрытая группа — колонка каналов пустая, без текста (как в Roku)
+    empty.textContent = g.closed ? '' : g.id === '__fav' ? t('emptyFav') : t('emptyGroup');
+    empty.classList.toggle('on', items.length === 0 && !g.closed);
     this.scheduleInfo();
   },
 
@@ -228,17 +407,25 @@ var Browser = {
 
   focusPanel: function (p) {
     if (p === 'channels' && !this.chans.items.length) p = 'groups';
+    if (p === 'prog' && !this.progCh) p = 'channels';
     this.panel = p;
     this.groups.setActive(p === 'groups');
     this.chans.setActive(p === 'channels');
+    this.progs.setActive(p === 'prog');
+    this.drawHints();
+  },
+
+  drawHints: function () {
+    $('hintPanels').textContent = t(this.panel === 'prog' ? 'hintBackList' : 'hintPanels');
   },
 
   // opts.fromPlayer — встать на играющий канал; opts.keep — сохранить текущее место
   enter: function (opts) {
     opts = opts || {};
     this.buildGroups();
+    if (this.progCh) { this.progCh = null; this.showGuideNodes(false); }
 
-    var gid = this.gid, chIdx = null, panel = this.panel;
+    var gid = this.gid, chIdx = null, panel = this.panel === 'prog' ? 'channels' : this.panel;
     if (opts.fromPlayer && Player.ch) {
       gid = Player.gid;
       panel = 'channels';
@@ -249,16 +436,19 @@ var Browser = {
       gi = this.indexOfGroup(App.listFor('__fav').length ? '__fav' : '__all');
       panel = 'groups';
     }
-    if (gi < 0) {
-      // Каналов нет (плейлист не загрузился) — курсор на «> Плейлисты»
+    var noChannels = gi < 0;
+    if (noChannels) {
+      // Каналов нет: при запуске нет ни кэша, ни сети — текст ошибки; иначе подсказка
       gi = this.indexOfGroup('__svc_playlists');
       this.gid = null;
-      this.chans.setItems([], 0);
-      $('chanEmpty').textContent = t('noPlaylistMsg');
-      $('chanEmpty').classList.add('on');
     }
     this.groups.setItems(this.groupItems, gi);
     this.openGroup(gi);
+    if (noChannels) {
+      this.chans.setItems([], 0);
+      $('chanEmpty').textContent = App.loadErr || t('noPlaylistMsg');
+      $('chanEmpty').classList.add('on');
+    }
 
     if (opts.fromPlayer && Player.ch) {
       var items = this.chans.items;
@@ -269,9 +459,11 @@ var Browser = {
     }
     this.panel = null;
     this.focusPanel(panel);
+    this.drawHeads();
   },
 
   onKey: function (code) {
+    if (this.panel === 'prog') return this.onProgKey(code);
     var list = this.panel === 'groups' ? this.groups : this.chans;
     switch (code) {
       case K.UP: list.move(-1); return true;
@@ -279,7 +471,10 @@ var Browser = {
       case K.CHUP: list.page(-1); return true;
       case K.CHDN: list.page(1); return true;
       case K.LEFT: this.focusPanel('groups'); return true;
-      case K.RIGHT: if (this.panel === 'groups') this.enterGroup(); return true;
+      case K.RIGHT:
+        if (this.panel === 'groups') this.enterGroup();
+        else if (this.chans.items.length) this.openGuide(this.chans.current());
+        return true;
       case K.OK:
         if (this.panel === 'groups') this.enterGroup();
         else if (this.chans.items.length) {
@@ -288,6 +483,7 @@ var Browser = {
           else App.playFrom(this.chans.items, this.chans.index, this.gid);
         }
         return true;
+      case K.RED: this.openContextMenu(); return true;
       case K.YELLOW:
         if (this.panel === 'channels' && this.chans.items.length) {
           App.toggleFav(this.chans.current());
@@ -301,6 +497,21 @@ var Browser = {
         else if (Player.ch) { Player.stop(); this.chans.render(); this.drawHeads(); }
         else App.confirmExit();
         return true;
+    }
+    return false;
+  },
+
+  onProgKey: function (code) {
+    switch (code) {
+      case K.UP: this.progs.move(-1); return true;
+      case K.DOWN: this.progs.move(1); return true;
+      case K.CHUP: this.progs.page(-1); this.drawProgDesc(); return true;
+      case K.CHDN: this.progs.page(1); this.drawProgDesc(); return true;
+      case K.OK: this.actOnProgramme(this.progs.current()); return true;
+      case K.RED: this.openContextMenu(); return true;
+      case K.LEFT: case K.BACK: this.closeGuide(); return true;
+      case K.BLUE: App.show('settings'); return true;
+      case K.RIGHT: return true;
     }
     return false;
   },
@@ -319,6 +530,7 @@ var Browser = {
   // После изменения избранного: обновить счётчик и, если мы в Избранном, сам список
   refreshCounts: function () {
     var favIdx = this.indexOfGroup('__fav');
+    if (favIdx < 0) return;
     this.groupItems[favIdx].count = App.listFor('__fav').length;
     this.groups.render();
     if (this.gid === '__fav') {

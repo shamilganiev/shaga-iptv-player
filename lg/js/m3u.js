@@ -1,8 +1,9 @@
-// Разбор M3U/M3U8 (формат IPTV-плейлистов).
+// ShaGa IPTV Player for LG webOS — m3u.js
+// M3U/M3U8 playlist parser / Разбор M3U/M3U8 (формат IPTV-плейлистов).
 //
 // #EXTM3U url-tvg="..."
 // #EXTINF:-1 tvg-id="..." tvg-logo="..." group-title="Кино" catchup="shift" catchup-days="7",Название
-// http://server/123/index.m3u8?token=...
+// http://server/123/index.m3u8?<ключ>=...
 var M3U = (function () {
 
   function parseAttrs(s) {
@@ -22,12 +23,23 @@ var M3U = (function () {
     return [s, ''];
   }
 
+  // Атрибуты архива (как в Roku): catchup / catchup-type, catchup-source / catchup-template,
+  // catchup-days / tvg-rec / timeshift. Дни без типа означают shift.
+  function catchupOf(a) {
+    var t = (a['catchup'] || a['catchup-type'] || '').toLowerCase();
+    var src = a['catchup-source'] || a['catchup-template'] || '';
+    var d = parseInt(a['catchup-days'] || a['tvg-rec'] || a['timeshift'], 10) || 0;
+    if (!t && d > 0) t = 'shift';
+    if (!t) return null;
+    return { t: t, d: d > 0 ? d : 3, src: src };
+  }
+
   function parse(text) {
     text = String(text || '').replace(/^\uFEFF/, '');
     var lines = text.split(/\r?\n/);
     var meta = { epg: '' };
     var channels = [];
-    var cur = null, extgrp = '';
+    var cur = null, extgrp = '', hdrCatch = null;
 
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i].trim();
@@ -36,6 +48,7 @@ var M3U = (function () {
       if (/^#EXTM3U/i.test(line)) {
         var h = parseAttrs(line);
         meta.epg = h['url-tvg'] || h['x-tvg-url'] || '';
+        hdrCatch = catchupOf(h);
         continue;
       }
       if (/^#EXTINF:/i.test(line)) {
@@ -46,10 +59,10 @@ var M3U = (function () {
           group: (a['group-title'] || '').trim(),
           logo: a['tvg-logo'] || '',
           tvgId: a['tvg-id'] || '',
-          catchup: a['catchup'] || '',
-          catchupDays: parseInt(a['catchup-days'], 10) || 0,
-          catchupSource: a['catchup-source'] || ''
+          catchup: '', catchupDays: 0, catchupSource: ''
         };
+        var cu = catchupOf(a) || hdrCatch;
+        if (cu) { cur.catchup = cu.t; cur.catchupDays = cu.d; cur.catchupSource = cu.src; }
         extgrp = '';
         continue;
       }

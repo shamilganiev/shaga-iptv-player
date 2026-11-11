@@ -1,3 +1,4 @@
+// ShaGa IPTV Player for LG webOS — dialogs.js
 var ICON_STAR = '<svg viewBox="0 0 24 24"><path d="M12 2.6l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.5l-5.9 3.1 1.2-6.5-4.8-4.6 6.6-.9z"/></svg>';
 var ICON_LOCK = '<svg viewBox="0 0 24 24"><path d="M7 10V7.5a5 5 0 0110 0V10h1.5v11h-13V10H7zm2.2 0h5.6V7.5a2.8 2.8 0 00-5.6 0V10z"/></svg>';
 

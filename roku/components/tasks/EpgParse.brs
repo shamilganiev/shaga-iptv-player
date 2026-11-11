@@ -3,11 +3,11 @@
 '
 ' XMLTV parsing helpers. The file is fed in pieces (chunks); only complete
 ' <channel> and <programme> elements are parsed, the tail waits for the next chunk.
-' Kept: programmes of playlist channels inside the window "−2 h … +24 h";
+' Kept: programmes of playlist channels inside the window "−24 h … +24 h";
 ' descriptions only for programmes starting within the next 4 hours (max 600 chars).
 ' Помощники разбора XMLTV. Файл подаётся кусками; разбираются только законченные
 ' <channel> и <programme>, хвост ждёт следующего куска.
-' Храним: передачи каналов плейлиста в окне «−2 ч … +24 ч»;
+' Храним: передачи каналов плейлиста в окне «−24 ч … +24 ч»;
 ' описания — только у передач, начинающихся в ближайшие 4 часа (до 600 символов).
 '
 ' State in m.ep (one parse) / Состояние в m.ep (один разбор):
@@ -20,7 +20,7 @@ sub epgParseBegin(keys as object)
     m.ep = {
         carry: "", channelsDone: false, keys: keys
         fileIds: {}, fileNames: {}, wanted: {}, keyToFile: {}, progs: {}
-        winLo: now - 2 * 3600, winHi: now + 24 * 3600, descUntil: now + 4 * 3600, winCache: {}
+        winLo: now - 24 * 3600, winHi: now + 24 * 3600, descUntil: now + 4 * 3600, winCache: {}
         total: 0, kept: 0, dropChan: 0, dropWindow: 0, dropTime: 0, minDate: "", maxDate: ""
         byId: 0, byName: 0
         rxChannel: CreateObject("roRegex", "<channel\s+id\s*=\s*[" + Chr(34) + "']([^" + Chr(34) + "']+)[" + Chr(34) + "'][^>]*>(.*?)</channel>", "s")

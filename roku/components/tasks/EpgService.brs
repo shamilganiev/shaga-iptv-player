@@ -24,6 +24,7 @@ sub epgLoop()
     m.port = CreateObject("roMessagePort")
     m.top.observeField("cmd", m.port)
     m.top.observeField("detailKey", m.port)
+    m.top.observeField("listKey", m.port)
     m.url = ""
     m.keys = {}
     m.progs = {}
@@ -40,6 +41,8 @@ sub epgLoop()
                 handleCmd(msg.getData())
             else if f = "detailKey" then
                 answerDetail(msg.getData())
+            else if f = "listKey" then
+                answerList(msg.getData())
             end if
         end if
         if m.loadedAt > 0 then
@@ -109,7 +112,7 @@ function loadFromCache() as boolean
     if text = "" then return false
     data = ParseJson(text)
     text = ""
-    if data = invalid or data.url <> m.url or data.progs = invalid then return false
+    if data = invalid or data.url <> m.url or data.progs = invalid or data.win <> 24 then return false
     now = CreateObject("roDateTime").AsSeconds()
     if now - data.loadedAt >= m.cfg.epgRefreshSec then
         dbg("EPG", "saved copy is older than the refresh period")
@@ -139,7 +142,7 @@ sub saveCache(ids as object, names as object)
     for each fid in ids
         idList.push(fid)
     end for
-    ok = WriteAsciiFile(cacheFile(), FormatJson({ url: m.url, loadedAt: m.loadedAt, progs: m.progs, ids: idList, names: names }))
+    ok = WriteAsciiFile(cacheFile(), FormatJson({ win: 24, url: m.url, loadedAt: m.loadedAt, progs: m.progs, ids: idList, names: names }))
     dbg("EPG", "saved copy written=" + ok.ToStr() + " in " + t0.TotalMilliseconds().ToStr() + " ms")
 end sub
 
@@ -404,6 +407,22 @@ sub publishNow()
         end if
     end for
     m.top.nowMap = map
+end sub
+
+' Whole window of one channel (yesterday .. tomorrow) / Всё окно одного канала
+sub answerList(key as dynamic)
+    if key = invalid or key = "" then return
+    items = []
+    fid = m.keyToFile[key]
+    if fid <> invalid then
+        pr = m.progs[fid]
+        if pr <> invalid then
+            for k = 0 to pr.s.Count() - 1
+                items.push({ s: pr.s[k], e: pr.e[k], t: pr.t[k], d: pr.d[k] })
+            end for
+        end if
+    end if
+    m.top.list = { key: key, items: items }
 end sub
 
 sub answerDetail(key as dynamic)
