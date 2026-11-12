@@ -161,6 +161,7 @@ var I18N = {
     yesterday: 'yesterday',
     tomorrow: 'tomorrow',
     noDesc: 'No description.',
+    descLoading: 'Loading the full description…',
     // выход
     exitTitle: 'Close ShaGa IPTV Player?',
     exit: 'Close'
@@ -313,6 +314,7 @@ var I18N = {
     yesterday: 'ayer',
     tomorrow: 'mañana',
     noDesc: 'Sin descripción.',
+    descLoading: 'Cargando la descripción completa…',
     exitTitle: '¿Cerrar ShaGa IPTV Player?',
     exit: 'Cerrar'
   },
@@ -464,6 +466,7 @@ var I18N = {
     yesterday: 'вчера',
     tomorrow: 'завтра',
     noDesc: 'Описания нет.',
+    descLoading: 'Загружаю полное описание…',
     exitTitle: 'Закрыть ShaGa IPTV Player?',
     exit: 'Закрыть'
   }

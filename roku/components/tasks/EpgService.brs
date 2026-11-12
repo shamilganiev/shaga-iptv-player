@@ -27,6 +27,8 @@ sub epgLoop()
     m.top.observeField("cmd", m.port)
     m.top.observeField("detailKey", m.port)
     m.top.observeField("listKey", m.port)
+    m.top.observeField("descReq", m.port)
+    m.rangesOk = false      ' the server gives byte ranges / сервер отдаёт куски файла
     m.url = ""
     m.keys = {}
     m.progs = {}
@@ -76,6 +78,8 @@ sub handleEvent(msg as object)
         answerDetail(msg.getData())
     else if f = "listKey" then
         answerList(msg.getData())
+    else if f = "descReq" then
+        answerDesc(msg.getData())
     end if
 end sub
 
@@ -230,7 +234,8 @@ function loadFromCache() as boolean
         end if
         for each fid in part
             c = part[fid]
-            pr = { s: [], e: [], t: c.t, d: c.d }
+            pr = { s: [], e: [], t: c.t, d: c.d, o: c.o }
+        if pr.o = invalid then pr.o = []
             n = c.s.Count()
             for i = 0 to n - 1
                 st = base + c.s[i]
@@ -245,6 +250,7 @@ function loadFromCache() as boolean
     m.loadedAt = idx.loadedAt
     m.fileIdList = idx.ids
     m.fileNames = idx.names
+    m.rangesOk = (idx.ranges = true)
     ' Older than the refresh period: shown now, fresh file in the background (next loop pass)
     ' Старше срока обновления: показываем сейчас, свежий файл — в фоне (следующий проход цикла)
     m.nextLoad = m.loadedAt + m.cfg.epgRefreshSec
@@ -279,7 +285,7 @@ sub saveCache(ids as object, names as object)
     inPart = 0
     for each fid in m.progs
         pr = m.progs[fid]
-        c = { s: [], l: [], t: pr.t, d: [] }
+        c = { s: [], l: [], t: pr.t, d: [], o: pr.o }
         n = pr.s.Count()
         for i = 0 to n - 1
             c.s.push(pr.s[i] - base)
@@ -300,7 +306,7 @@ sub saveCache(ids as object, names as object)
         parts = parts + 1
     end if
     if ok then
-        ok = WriteAsciiFile(cacheFile(), FormatJson({ v: 3, url: m.url, loadedAt: m.loadedAt, base: base, parts: parts, ids: idList, names: names }, &h0001))
+        ok = WriteAsciiFile(cacheFile(), FormatJson({ v: 3, url: m.url, loadedAt: m.loadedAt, base: base, parts: parts, ids: idList, names: names, ranges: m.rangesOk }, &h0001))
     end if
     for p = 0 to parts - 1
         st = fs.Stat(partFile(p))
@@ -341,6 +347,7 @@ sub loadFromNetwork()
 
     head = headRequest(m.url)
     dbg("EPG", "answer HTTP " + head.code.ToStr() + "; type " + head.ctype + ", size " + head.size.ToStr() + ", encoding " + head.enc + ", ranges " + head.ranges)
+    m.rangesOk = (head.ranges = "bytes")
     if head.code < 200 or head.code >= 400 then
         failLoad("http " + head.code.ToStr())
         return
@@ -656,3 +663,88 @@ sub answerDetail(key as dynamic)
     end if
     m.top.detail = { key: key, items: items, known: (fid <> invalid) }
 end sub
+
+' ---------- full description on request (1.3.4) / полное описание по запросу ----------
+' The place of the programme in the file is known from parsing: ask the server for ~16 KB
+' around it (HTTP Range), check that it is the same programme (start time and title)
+' and take the whole <desc>. Otherwise: the short text from memory.
+' Место передачи в файле известно с разбора: просим у сервера ~16 КБ вокруг (HTTP Range),
+' проверяем, что это та же передача (время начала и название), берём весь <desc>.
+' Иначе — короткий текст из памяти.
+sub answerDesc(q as dynamic)
+    if q = invalid or q.key = invalid then return
+    ans = { key: q.key, s: q.s, d: "", src: "memory", why: "" }
+    fid = m.keyToFile[q.key]
+    pr = invalid
+    if fid <> invalid then pr = m.progs[fid]
+    k = -1
+    if pr <> invalid then
+        for i = 0 to pr.s.Count() - 1
+            if pr.s[i] = q.s then
+                k = i
+                exit for
+            end if
+        end for
+    end if
+    if k < 0 then
+        ans.why = "programme not found"
+        m.top.descAns = ans
+        return
+    end if
+    ans.d = pr.d[k]
+    o = -1
+    if pr.o <> invalid and k < pr.o.Count() then o = pr.o[k]
+    if not m.rangesOk then
+        ans.why = "server gives no byte ranges"
+    else if o < 0 then
+        ans.why = "no place in the file"
+    else
+        full = fetchDesc(o, q.s, pr.t[k])
+        if full.ok then
+            ans.d = full.d
+            ans.src = "network"
+        else
+            ans.why = full.why
+        end if
+    end if
+    m.top.descAns = ans
+end sub
+
+function fetchDesc(o as integer, s as integer, title as string) as object
+    t0 = CreateObject("roTimespan")
+    a = o - 2048
+    if a < 0 then a = 0
+    port = CreateObject("roMessagePort")
+    req = newRequest(m.url)
+    req.SetMessagePort(port)
+    req.AddHeader("Range", "bytes=" + a.ToStr() + "-" + (o + 16383).ToStr())
+    if not req.AsyncGetToString() then return { ok: false, why: "network" }
+    msg = wait(6000, port)
+    if type(msg) <> "roUrlEvent" then
+        req.AsyncCancel()
+        return { ok: false, why: "no answer in 6 s" }
+    end if
+    if msg.GetResponseCode() <> 206 then return { ok: false, why: "http " + msg.GetResponseCode().ToStr() }
+    text = msg.GetString()
+    ' Find the same programme: start time and title / Ищем ту же передачу: начало и название
+    from = 0
+    while true
+        p = text.Instr(from, "<programme")
+        if p < 0 then exit while
+        e = text.Instr(p, "</programme>")
+        if e < 0 then exit while
+        piece = text.Mid(p, e - p)
+        te = piece.Instr(">")
+        if te > 0 then
+            head = piece.Left(te)
+            st = epgAttr(head, "start")
+            if st.Len() >= 14 and epgToEpoch(st.Left(14), st.Mid(14).Trim()) = s and epgTag(piece, "title", te) = title then
+                d = epgTag(piece, "desc", te)
+                dbg("EPG", "full description from the file in " + t0.TotalMilliseconds().ToStr() + " ms, " + d.Len().ToStr() + " chars")
+                return { ok: true, d: d }
+            end if
+        end if
+        from = e + 12
+    end while
+    return { ok: false, why: "file changed (programme not at its place)" }
+end function

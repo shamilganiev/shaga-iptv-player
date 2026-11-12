@@ -21,7 +21,7 @@ function isInput(el) {
 }
 
 var App = {
-  version: '1.3.2',
+  version: '1.3.4',
   PRIVACY_URL: 'https://shamilganiev.github.io/shaga-iptv-player/privacy.html',
   SUPPORT_URL: 'https://github.com/shamilganiev/shaga-iptv-player/issues',
   MAX_FAV: 200,

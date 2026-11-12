@@ -21,6 +21,10 @@
         <!-- запрос: ключ канала -> list: все передачи канала в окне -->
         <field id="listKey" type="string" alwaysNotify="true" />
         <field id="list" type="assocarray" />
+        <!-- 1.3.4: full description: request { key, s } -> answer { key, s, d, src, why } -->
+        <!-- 1.3.4: полное описание: запрос { key, s } -> ответ { key, s, d, src, why } -->
+        <field id="descReq" type="assocarray" alwaysNotify="true" />
+        <field id="descAns" type="assocarray" />
     </interface>
     <script type="text/brightscript" uri="EpgService.brs" />
     <script type="text/brightscript" uri="EpgParse.brs" />

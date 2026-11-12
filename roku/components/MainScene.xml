@@ -98,6 +98,20 @@
             <Label id="wTip" translation="[410,690]" width="1100" wrap="true" horizAlign="center" color="0xA39DB8FF" font="font:SmallSystemFont" />
         </Group>
 
+        <!-- 1.3.4: programme description window: wide, the font shrinks for long text -->
+        <!-- 1.3.4: окно описания передачи: широкое, для длинного текста шрифт меньше -->
+        <Group id="descBox" visible="false">
+            <Rectangle translation="[0,0]" width="1920" height="1080" color="0x000000B0" />
+            <Rectangle translation="[160,90]" width="1600" height="900" color="0x262238FF" />
+            <Rectangle translation="[160,90]" width="1600" height="6" color="0xA995FFFF" />
+            <Label id="descTitle" translation="[220,130]" width="1480" wrap="true" maxLines="2" color="0xECE9F6FF" font="font:LargeBoldSystemFont" />
+            <Label id="descTime" translation="[220,250]" width="1480" color="0xA39DB8FF" font="font:MediumSystemFont" />
+            <Label id="descText" translation="[220,310]" width="1480" height="590" wrap="true" color="0xECE9F6FF">
+                <Font role="font" uri="font:SystemFontFile" size="32" />
+            </Label>
+            <Label id="descHint" translation="[220,925]" width="1480" color="0xA39DB8FF" font="font:SmallestSystemFont" />
+        </Group>
+
         <!-- Receives keys when no list should have focus / Ловит кнопки, когда списки без фокуса -->
         <Group id="keyCatcher" focusable="true" />
 

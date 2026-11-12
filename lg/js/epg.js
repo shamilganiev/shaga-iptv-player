@@ -60,6 +60,7 @@ var EPG = {
       if (age >= self.MAX_AGE_MS) { Log.info('EPG: сохранённая копия старше 24 ч, не используется'); return false; }
       self.byKey = c.byKey;
       self.stats = c.stats;
+      self.ranges = c.ranges !== false;
       self.loadedAt = c.loadedAt;
       self.state = 'ready';
       Log.info('EPG: сохранённая копия за ' + (Date.now() - t0) + ' мс, ей ' + Math.round(age / 60000) + ' мин; каналов с программой ' +
@@ -136,7 +137,7 @@ var EPG = {
 
   saveCopy: function () {
     var t0 = Date.now(), url = this.url;
-    Cache.setKey('epg', { win: 24, url: url, loadedAt: this.loadedAt, byKey: this.byKey, stats: this.stats }).then(function () {
+    Cache.setKey('epg', { win: 24, url: url, loadedAt: this.loadedAt, byKey: this.byKey, stats: this.stats, ranges: this.ranges }).then(function () {
       Log.info('EPG: копия сохранена за ' + (Date.now() - t0) + ' мс');
     });
   },
@@ -190,7 +191,12 @@ var EPG = {
       }
     }
 
-    function handleProg(attrs, body) {
+    // 1.3.4: байтовое место каждой передачи в файле — для полного описания по запросу
+    var enc8 = window.TextEncoder ? new TextEncoder() : null;
+    var byteOk = !!enc8, bufByte = 0;
+    function blen(x) { return enc8.encode(x).length; }
+
+    function handleProg(attrs, body, at) {
       st.progs++;
       var cid = attr(attrs, 'channel');
       var k = alias[cid] || wantId[cid];
@@ -209,9 +215,10 @@ var EPG = {
       if (e <= from || s >= to) { st.outWindow++; return; }
       var tm = /<title[^>]*>([\s\S]*?)<\/title>/.exec(body);
       var p = { s: s, e: e, t: tm ? decode(tm[1]) : '' };
-      // 1.3.2: описания у всех передач окна, до 300 символов
+      // Короткое описание (200 символов) — для колонки; полное скачивается по запросу (1.3.4)
       var dm = /<desc[^>]*>([\s\S]*?)<\/desc>/.exec(body);
-      if (dm) { var dd = decode(dm[1]); p.d = dd.length > 300 ? own(dd.slice(0, 297)) + '...' : dd; }
+      if (dm) { var dd = decode(dm[1]); p.d = dd.length > 200 ? own(dd.slice(0, 197)) + '...' : dd; }
+      if (at >= 0) p.o = at;
       (byKey[k] || (byKey[k] = [])).push(p);
       st.kept++;
     }
@@ -225,10 +232,15 @@ var EPG = {
       var seg = buf.slice(0, cut);
       buf = buf.slice(cut);
       var re = /<(programme|channel)\b([^>]*)>([\s\S]*?)<\/\1>/g, m;
+      var cur = bufByte, last = 0;
       while ((m = re.exec(seg))) {
-        if (m[1] === 'programme') handleProg(m[2], m[3]);
-        else handleChannel(m[2], m[3]);
+        if (m[1] === 'programme') {
+          var at = -1;
+          if (byteOk) { cur += blen(seg.slice(last, m.index)); last = m.index; at = cur; }
+          handleProg(m[2], m[3], at);
+        } else handleChannel(m[2], m[3]);
       }
+      if (byteOk) bufByte = cur + blen(seg.slice(last));
     }
 
     var aborter = window.AbortController ? new AbortController() : null;
@@ -249,6 +261,10 @@ var EPG = {
         if (gz) throw new Error('нет потокового чтения для .gz');
         return res.text().then(function (txt) { st.bytes = txt.length; buf = txt; processBuf(true); });
       }
+      // Заголовок Accept-Ranges с другого сервера может быть не виден (CORS) — просто пробуем Range,
+      // а если сервер ответит 200 вместо 206, больше не пробуем
+      self.ranges = true;
+      if (gz || (opts.enc && opts.enc !== 'utf-8')) byteOk = false;   // места в сжатом/перекодированном файле не годятся
       if (gz) {
         if (!window.DecompressionStream) throw new Error('нет поддержки .gz');
         stream = stream.pipeThrough(new DecompressionStream('gzip'));
@@ -370,6 +386,46 @@ var EPG = {
   progress: function (p) {
     if (!p) return 0;
     return Math.max(0, Math.min(1, (Date.now() - p.s) / (p.e - p.s)));
+  },
+
+  // ---------- Полное описание по запросу (1.3.4) ----------
+  // Просим у сервера ~16 КБ вокруг места передачи в файле (HTTP Range), проверяем, что это
+  // та же передача (начало и название), берём весь <desc>. Иначе — короткий текст из памяти.
+  // Ответ: { d, src: 'network'|'memory', why }
+  fullDesc: function (p) {
+    var self = this, short = { d: p.d || '', src: 'memory', why: '' };
+    if (!this.ranges) { short.why = 'сервер не отдаёт куски файла'; return Promise.resolve(short); }
+    if (p.o == null) { short.why = 'нет места в файле'; return Promise.resolve(short); }
+    var a = Math.max(0, p.o - 2048), t0 = Date.now();
+    var ctrl = window.AbortController ? new AbortController() : null;
+    var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, 6000);
+    return fetch(this.url, { headers: { Range: 'bytes=' + a + '-' + (p.o + 16383) }, signal: ctrl ? ctrl.signal : undefined })
+      .then(function (res) {
+        if (res.status !== 206) {
+          if (ctrl) ctrl.abort();
+          if (res.status === 200) self.ranges = false;   // отдаёт весь файл — кусками не умеет
+          throw new Error('HTTP ' + res.status);
+        }
+        return res.text();
+      }).then(function (txt) {
+        clearTimeout(timer);
+        var re = /<programme\b([^>]*)>([\s\S]*?)<\/programme>/g, m;
+        while ((m = re.exec(txt))) {
+          var st = /\bstart\s*=\s*["']([^"']*)/.exec(m[1]);
+          var tm = /<title[^>]*>([\s\S]*?)<\/title>/.exec(m[2]);
+          if (st && parseTime(st[1]) === p.s && tm && decode(tm[1]) === p.t) {
+            var dm = /<desc[^>]*>([\s\S]*?)<\/desc>/.exec(m[2]);
+            Log.info('EPG: полное описание из файла за ' + (Date.now() - t0) + ' мс');
+            return { d: dm ? decode(dm[1]) : '', src: 'network', why: '' };
+          }
+        }
+        short.why = 'файл изменился (передачи нет на месте)';
+        return short;
+      }).catch(function (err) {
+        clearTimeout(timer);
+        short.why = err && err.name === 'AbortError' ? 'нет ответа за 6 с' : (err && err.message) || 'сеть';
+        return short;
+      });
   },
 
   hm: function (ms) {

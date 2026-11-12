@@ -4,7 +4,7 @@
 ' XMLTV parsing helpers. The file is fed in pieces (chunks); only complete
 ' <channel> and <programme> elements are parsed, the tail waits for the next chunk.
 ' Kept: programmes of playlist channels inside the window "−24 h … +24 h";
-' descriptions for all of them, up to 300 characters (1.3.2; before: next 4 hours only).
+' short descriptions (200 chars) for all of them; the full text is fetched on request (1.3.4).
 ' Помощники разбора XMLTV. Файл подаётся кусками; разбираются только законченные
 ' <channel> и <programme>, хвост ждёт следующего куска.
 ' Храним: передачи каналов плейлиста в окне «−24 ч … +24 ч»;
@@ -23,6 +23,7 @@ sub epgParseBegin(keys as object)
         winLo: now - 24 * 3600, winHi: now + 24 * 3600, descUntil: now + 4 * 3600, winCache: {}
         total: 0, kept: 0, dropChan: 0, dropWindow: 0, dropTime: 0, minDate: "", maxDate: ""
         byId: 0, byName: 0
+        carryPos: 0, ba: CreateObject("roByteArray")   ' byte position of the carry / байтовая позиция хвоста
         rxChannel: CreateObject("roRegex", "<channel\s+id\s*=\s*[" + Chr(34) + "']([^" + Chr(34) + "']+)[" + Chr(34) + "'][^>]*>(.*?)</channel>", "s")
         rxName: CreateObject("roRegex", "<display-name[^>]*>([^<]*)</display-name>", "")
     }
@@ -34,6 +35,9 @@ sub epgParseChunk(chunk as string, last as boolean)
     ep = m.ep
     buf = ep.carry + chunk
     ep.carry = ""
+    ' 1.3.4: byte position of every programme in the file, to fetch its full description later
+    ' 1.3.4: байтовое место каждой передачи в файле — чтобы потом скачать полное описание
+    cur = ep.carryPos
     if not ep.channelsDone then
         p = buf.Instr("<programme")
         if p < 0 and not last then
@@ -43,12 +47,16 @@ sub epgParseChunk(chunk as string, last as boolean)
             n = pieces.Count()
             for i = 0 to n - 2
                 epgParseChannels(pieces[i] + "</channel>")
+                cur = cur + epgBytes(pieces[i]) + 10
             end for
             ep.carry = pieces[n - 1]
+            ep.carryPos = cur
             return
         end if
         if p < 0 then p = buf.Len()
-        epgParseChannels(buf.Left(p))
+        head = buf.Left(p)
+        epgParseChannels(head)
+        cur = cur + epgBytes(head)
         buf = buf.Mid(p)
         ep.channelsDone = true
         epgBuildKeyMap()
@@ -58,9 +66,15 @@ sub epgParseChunk(chunk as string, last as boolean)
     lastIdx = n - 1
     if last then lastIdx = n
     for i = 0 to lastIdx - 1
-        if i < n then epgParseProgramme(pieces[i])
+        if i < n - 1 or last then
+            epgParseProgramme(pieces[i], cur)
+            cur = cur + epgBytes(pieces[i]) + 12
+        end if
     end for
-    if not last then ep.carry = pieces[n - 1]
+    if not last then
+        ep.carry = pieces[n - 1]
+        ep.carryPos = cur
+    end if
 end sub
 
 sub epgParseChannels(text as string)
@@ -102,7 +116,14 @@ sub epgBuildKeyMap()
     end for
 end sub
 
-sub epgParseProgramme(piece as string)
+' UTF-8 length of a string / Длина строки в байтах UTF-8
+function epgBytes(t as string) as integer
+    m.ep.ba.FromAsciiString(t)
+    return m.ep.ba.Count()
+end function
+
+' pieceByte: byte position of the piece in the file / байтовое место куска в файле
+sub epgParseProgramme(piece as string, pieceByte as integer)
     ep = m.ep
     p = piece.Instr("<programme")
     if p < 0 then return
@@ -148,17 +169,20 @@ sub epgParseProgramme(piece as string)
     end if
     title = epgTag(piece, "title", te)
     desc = epgTag(piece, "desc", te)
-    if desc.Len() > 300 then desc = desc.Left(297) + "..."
+    ' Short text for rows and the info column; the full one is fetched on request (1.3.4)
+    ' Короткий текст для строк и колонки; полный скачивается по запросу (1.3.4)
+    if desc.Len() > 200 then desc = desc.Left(197) + "..."
 
     pr = ep.progs[cid]
     if pr = invalid then
-        pr = { s: [], e: [], t: [], d: [] }
+        pr = { s: [], e: [], t: [], d: [], o: [] }
         ep.progs[cid] = pr
     end if
     pr.s.push(s)
     pr.e.push(e)
     pr.t.push(title)
     pr.d.push(desc)
+    pr.o.push(pieceByte + p)   ' «<programme» is ASCII before it, usually just a line break / перед ним обычно перевод строки
     ep.kept = ep.kept + 1
 end sub
 
@@ -184,12 +208,13 @@ function epgSortProgs(pr as object) as object
         idx.push({ k: pr.s[i], i: i })
     end for
     idx.SortBy("k")
-    out = { s: [], e: [], t: [], d: [] }
+    out = { s: [], e: [], t: [], d: [], o: [] }
     for each it in idx
         out.s.push(pr.s[it.i])
         out.e.push(pr.e[it.i])
         out.t.push(pr.t[it.i])
         out.d.push(pr.d[it.i])
+        out.o.push(pr.o[it.i])
     end for
     return out
 end function

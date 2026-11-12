@@ -298,9 +298,27 @@ var Browser = {
     });
   },
 
+  // 1.3.4: широкое окно; сразу — короткий текст, полный приходит из файла и заменяет его
   showDescription: function (p) {
-    Confirm.open(p.t, [{ label: t('ok') }], null,
-      EPG.hm(p.s) + ' – ' + EPG.hm(p.e) + '. ' + (p.d || t('noDesc')));
+    var time = this.dayPrefix(p.s) + EPG.hm(p.s) + ' – ' + EPG.hm(p.e);
+    Confirm.open(p.t, [{ label: t('ok') }], null, time + '\n\n' + (p.d ? p.d + '\n\n' : '') + t('descLoading'));
+    this.descFit();
+    var self = this;
+    EPG.fullDesc(p).then(function (r) {
+      var d = r.d || '';
+      Log.info('UI описание «' + p.t + '» ' + EPG.hm(p.s) + ': ' + (r.src === 'network' ? 'из файла' : 'из памяти') + ', ' +
+        d.length + ' симв.' + (r.why ? ' (' + r.why + ')' : '') + ': ' + (d ? d.slice(0, 60) : '(нет описания)'));
+      if (!Confirm.isOpen || $('cfTitle').textContent !== p.t) return;
+      $('cfMsg').textContent = time + '\n\n' + (d || t('noDesc'));
+      self.descFit();
+    });
+  },
+
+  // Окно описания пошире, шрифт меньше для длинного текста
+  descFit: function () {
+    var box = $('confirm').querySelector('.box'), n = $('cfMsg').textContent.length;
+    box.classList.add('desc-box');
+    $('cfMsg').style.fontSize = n > 1400 ? '20px' : n > 1000 ? '22px' : n > 700 ? '24px' : '26px';
   },
 
   // ---------- Контекстное меню (красная кнопка; на Roku — «*») ----------

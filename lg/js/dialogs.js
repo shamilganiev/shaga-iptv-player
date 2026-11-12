@@ -38,6 +38,8 @@ var Confirm = {
     this.onCancel = onCancel || null;
     this.idx = 0;
     $('cfTitle').textContent = title;
+    $('confirm').querySelector('.box').classList.remove('desc-box');   // окно описания — только по запросу
+    $('cfMsg').style.fontSize = '';
     $('cfMsg').textContent = msg || '';
     $('cfMsg').style.display = msg ? '' : 'none';
     var box = $('cfBtns');

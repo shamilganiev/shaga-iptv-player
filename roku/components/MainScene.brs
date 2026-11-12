@@ -896,6 +896,11 @@ end sub
 
 function onKeyEvent(key as string, press as boolean) as boolean
     if not press then return false
+    ' Description window: OK, Back or * close it / Окно описания: OK, Назад или * закрывают
+    if m.descOpen then
+        if key = "OK" or key = "back" or key = "options" then closeDescription()
+        return true
+    end if
     if m.dialogOpen then
         ' Safety: the flag is set but no dialog is on screen / Страховка: флаг стоит, а окна нет
         if m.top.dialog = invalid then

@@ -20,6 +20,15 @@ sub guideInit()
     m.progList.observeField("itemFocused", "onProgFocused")
     m.progList.observeField("itemSelected", "onProgSelected")
     m.epgSvc.observeField("list", "onEpgList")
+    m.epgSvc.observeField("descAns", "onDescAns")
+    m.descBox = m.top.findNode("descBox")
+    m.descTitle = m.top.findNode("descTitle")
+    m.descTime = m.top.findNode("descTime")
+    m.descText = m.top.findNode("descText")
+    m.top.findNode("descHint").text = m.S.descHint
+    m.descOpen = false
+    m.descItem = invalid
+    m.descKey = ""
 end sub
 
 ' ---------- programme list / список передач ----------
@@ -145,7 +154,7 @@ sub actOnProgramme(it as object)
             showInfoDialog(it.t, [m.S.archUnavailable])
         end if
     else
-        showDescription(it)
+        showDescription(it, epgKeyOf(m.channels[m.progIx]))
     end if
 end sub
 
@@ -163,10 +172,58 @@ function dayPrefix(secs as integer) as string
     return m.S.tomorrow + " "
 end function
 
-sub showDescription(it as object)
-    d = it.d
+' 1.3.4: own wide window. The short text from memory is shown at once, the full one
+' comes from the file (EpgService.answerDesc) and replaces it.
+' 1.3.4: своё широкое окно. Сразу — короткий текст из памяти, полный приходит из файла
+' (EpgService.answerDesc) и заменяет его.
+sub showDescription(it as object, key as string)
+    m.descItem = it
+    m.descKey = key
+    m.descTitle.text = it.t
+    m.descTime.text = dayPrefix(it.s) + hhmm(it.s) + " – " + hhmm(it.e)
+    t = it.d
+    if t = "" then t = m.S.descLoading else t = t + Chr(10) + Chr(10) + m.S.descLoading
+    setDescText(t)
+    m.descBox.visible = true
+    m.descOpen = true
+    m.keyCatcher.setFocus(true)
+    m.epgSvc.descReq = { key: key, s: it.s }
+end sub
+
+' Font by length so that the text fits / Шрифт по длине, чтобы текст поместился
+sub setDescText(t as string)
+    n = t.Len()
+    size = 32
+    if n > 700 then size = 28
+    if n > 1000 then size = 25
+    if n > 1400 then size = 22
+    m.descText.font.size = size
+    m.descText.text = t
+end sub
+
+sub onDescAns()
+    a = m.epgSvc.descAns
+    if a = invalid or m.descItem = invalid or a.key <> m.descKey or a.s <> m.descItem.s then return
+    d = a.d
+    first = d.Left(60).Replace(Chr(10), " ")
+    if d = "" then first = "(no description)"
+    dbg("UI", "description '" + m.descItem.t + "' " + hhmm(a.s) + ": " + a.src + ", " + d.Len().ToStr() + " chars" + iif(a.why <> "", " (" + a.why + ")", "") + ": " + first)
+    if not m.descOpen then return
     if d = "" then d = m.S.noDesc
-    showInfoDialog(it.t, [dayPrefix(it.s) + hhmm(it.s) + " – " + hhmm(it.e), d])
+    setDescText(d)
+end sub
+
+function iif(c as boolean, a as string, b as string) as string
+    if c then return a
+    return b
+end function
+
+sub closeDescription()
+    m.descBox.visible = false
+    m.descOpen = false
+    m.descItem = invalid
+    dbg("UI", "description closed")
+    restoreFocus()
 end sub
 
 ' Full description of the programme on air: asked from the service / Описание передачи в эфире
@@ -184,10 +241,11 @@ end sub
 ' Called from onEpgDetail / Вызывается из onEpgDetail
 function guideDetailArrived(d as object) as boolean
     if m.descWanted = "" or d.key <> m.descWanted then return false
+    key = m.descWanted
     m.descWanted = ""
     now = CreateObject("roDateTime").AsSeconds()
     if d.items.Count() > 0 and d.items[0].s <= now then
-        showDescription(d.items[0])
+        showDescription(d.items[0], key)
     else if m.epgStatus.state = "loading" then
         showInfoDialog(m.S.ctxDesc, [m.S.epgLoading])
     else
@@ -267,7 +325,7 @@ sub onContextButton(b as integer, ctx as object)
     else if a = "group" then
         goToChannelGroup(ctx.ix)
     else if a = "progdesc" then
-        showDescription(ctx.item)
+        showDescription(ctx.item, epgKeyOf(m.channels[m.progIx]))
     else if a = "watch" then
         actOnProgramme(ctx.item)
     else if a = "hide" then
