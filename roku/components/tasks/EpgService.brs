@@ -187,39 +187,64 @@ end function
 ' описания — только у передач около «сейчас» (−3 ч … +12 ч). Старая копия удаляется перед
 ' записью: в 1.3.1 полная копия не помещалась в cachefs:, и Roku очищал весь cachefs:
 ' приложения (вместе с копией плейлиста).
+' 1.3.3: the copy is split into parts of ~25 000 programmes (3–4 MB each): ReadAsciiFile
+' refused the single 20 MB file ("file is too big"). epg.json is a small index.
+' 1.3.3: копия разбита на части по ~25 000 передач (3–4 МБ): ReadAsciiFile не читал
+' один файл в 20 МБ («file is too big»). epg.json — маленький оглавление.
+function partFile(i as integer) as string
+    return "cachefs:/epg_" + i.ToStr() + ".json"
+end function
+
+sub deleteCopy()
+    fs = CreateObject("roFileSystem")
+    if fs.Exists(cacheFile()) then DeleteFile(cacheFile())
+    for i = 0 to 39
+        if fs.Exists(partFile(i)) then DeleteFile(partFile(i))
+    end for
+end sub
+
 function loadFromCache() as boolean
     t0 = CreateObject("roTimespan")
-    if not CreateObject("roFileSystem").Exists(cacheFile()) then return false
-    text = ReadAsciiFile(cacheFile())
-    if text = "" then return false
-    data = ParseJson(text)
-    text = ""
-    if data = invalid or data.url <> m.url or data.progs = invalid or data.v <> 2 then return false
+    fs = CreateObject("roFileSystem")
+    if not fs.Exists(cacheFile()) then return false
+    idx = ParseJson(ReadAsciiFile(cacheFile()))
+    if idx = invalid or idx.url <> m.url or idx.v <> 3 or idx.parts = invalid then return false
     now = CreateObject("roDateTime").AsSeconds()
-    age = now - data.loadedAt
+    age = now - idx.loadedAt
     if age >= m.cfg.epgMaxAgeSec then
         dbg("EPG", "saved copy is older than " + Int(m.cfg.epgMaxAgeSec / 3600).ToStr() + " h, not used")
         return false
     end if
     ' Expand offsets back to seconds / Смещения обратно в секунды
-    base = data.base
+    base = idx.base
     progs = {}
-    for each fid in data.progs
-        c = data.progs[fid]
-        pr = { s: [], e: [], t: c.t, d: c.d }
-        n = c.s.Count()
-        for i = 0 to n - 1
-            st = base + c.s[i]
-            pr.s.push(st)
-            pr.e.push(st + c.l[i])
+    for p = 0 to idx.parts - 1
+        if not fs.Exists(partFile(p)) then
+            dbg("EPG", "saved copy part " + p.ToStr() + " is missing")
+            return false
+        end if
+        part = ParseJson(ReadAsciiFile(partFile(p)))
+        if part = invalid then
+            dbg("EPG", "saved copy part " + p.ToStr() + " is not readable")
+            return false
+        end if
+        for each fid in part
+            c = part[fid]
+            pr = { s: [], e: [], t: c.t, d: c.d }
+            n = c.s.Count()
+            for i = 0 to n - 1
+                st = base + c.s[i]
+                pr.s.push(st)
+                pr.e.push(st + c.l[i])
+            end for
+            progs[fid] = pr
         end for
-        progs[fid] = pr
+        part = invalid
     end for
-    data.progs = invalid
     m.progs = progs
-    m.loadedAt = data.loadedAt
-    m.fileIdList = data.ids
-    m.fileNames = data.names
+    m.loadedAt = idx.loadedAt
+    m.fileIdList = idx.ids
+    m.fileNames = idx.names
     ' Older than the refresh period: shown now, fresh file in the background (next loop pass)
     ' Старше срока обновления: показываем сейчас, свежий файл — в фоне (следующий проход цикла)
     m.nextLoad = m.loadedAt + m.cfg.epgRefreshSec
@@ -227,7 +252,7 @@ function loadFromCache() as boolean
     dbg("EPG", "saved copy is " + Int(age / 60).ToStr() + " min old; next download in " + Int((m.nextLoad - now) / 60).ToStr() + " min")
     ' Re-map with the current playlist / Пересопоставляем с текущим плейлистом
     remap()
-    dbg("EPG", "saved copy read in " + t0.TotalMilliseconds().ToStr() + " ms; channels with guide " + countWithGuide().ToStr() + " of " + m.keys.Count().ToStr())
+    dbg("EPG", "saved copy read (" + idx.parts.ToStr() + " parts) in " + t0.TotalMilliseconds().ToStr() + " ms; channels with guide " + countWithGuide().ToStr() + " of " + m.keys.Count().ToStr())
     m.lastMinute = -1
     publishNow()
     setStatus("ready", "")
@@ -236,10 +261,9 @@ end function
 
 sub saveCache(ids as object, names as object)
     t0 = CreateObject("roTimespan")
-    path = cacheFile()
     fs = CreateObject("roFileSystem")
     ' Free the space of the old copy first / Сначала освобождаем место старой копии
-    if fs.Exists(path) then DeleteFile(path)
+    deleteCopy()
     idList = []
     for each fid in ids
         idList.push(fid)
@@ -248,7 +272,11 @@ sub saveCache(ids as object, names as object)
     base = now - 26 * 3600
     dLo = now - 3 * 3600
     dHi = now + 12 * 3600
-    progs = {}
+    parts = 0
+    total = 0
+    ok = true
+    part = {}
+    inPart = 0
     for each fid in m.progs
         pr = m.progs[fid]
         c = { s: [], l: [], t: pr.t, d: [] }
@@ -258,19 +286,35 @@ sub saveCache(ids as object, names as object)
             c.l.push(pr.e[i] - pr.s[i])
             if pr.e[i] > dLo and pr.s[i] < dHi then c.d.push(pr.d[i]) else c.d.push("")
         end for
-        progs[fid] = c
+        part[fid] = c
+        inPart = inPart + n
+        if inPart >= 25000 then
+            ok = ok and writePart(parts, part, fs)
+            parts = parts + 1
+            part = {}
+            inPart = 0
+        end if
     end for
-    text = FormatJson({ v: 2, url: m.url, loadedAt: m.loadedAt, base: base, progs: progs, ids: idList, names: names }, &h0001)
-    progs = invalid
-    chars = text.Len()
-    ok = WriteAsciiFile(path, text)
-    text = ""
-    size = 0
-    st = fs.Stat(path)
-    if st <> invalid and st.size <> invalid then size = st.size
-    if not ok and fs.Exists(path) then DeleteFile(path)
-    dbg("EPG", "saved copy written=" + ok.ToStr() + ", " + chars.ToStr() + " chars, " + Int(size / 1024).ToStr() + " KB on disk, in " + t0.TotalMilliseconds().ToStr() + " ms")
+    if inPart > 0 and ok then
+        ok = writePart(parts, part, fs)
+        parts = parts + 1
+    end if
+    if ok then
+        ok = WriteAsciiFile(cacheFile(), FormatJson({ v: 3, url: m.url, loadedAt: m.loadedAt, base: base, parts: parts, ids: idList, names: names }, &h0001))
+    end if
+    for p = 0 to parts - 1
+        st = fs.Stat(partFile(p))
+        if st <> invalid and st.size <> invalid then total = total + st.size
+    end for
+    if not ok then deleteCopy()
+    dbg("EPG", "saved copy written=" + ok.ToStr() + ", " + parts.ToStr() + " parts, " + Int(total / 1024).ToStr() + " KB on disk, in " + t0.TotalMilliseconds().ToStr() + " ms")
 end sub
+
+function writePart(i as integer, part as object, fs as object) as boolean
+    ok = WriteAsciiFile(partFile(i), FormatJson(part, &h0001))
+    if not ok then dbg("ERR", "saved copy part " + i.ToStr() + " not written")
+    return ok
+end function
 
 ' ---------- download + parse / загрузка и разбор ----------
 
