@@ -25,7 +25,7 @@ sub guideInit()
     m.descTitle = m.top.findNode("descTitle")
     m.descTime = m.top.findNode("descTime")
     m.descText = m.top.findNode("descText")
-    m.top.findNode("descHint").text = m.S.descHint
+    m.descHint = m.top.findNode("descHint")   ' text is set when shown: m.S is not ready in init / текст — при показе: m.S в init ещё нет
     m.descOpen = false
     m.descItem = invalid
     m.descKey = ""
@@ -179,6 +179,7 @@ end function
 sub showDescription(it as object, key as string)
     m.descItem = it
     m.descKey = key
+    m.descHint.text = m.S.descHint
     m.descTitle.text = it.t
     m.descTime.text = dayPrefix(it.s) + hhmm(it.s) + " – " + hhmm(it.e)
     t = it.d
