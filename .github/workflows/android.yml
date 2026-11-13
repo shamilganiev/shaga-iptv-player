@@ -1,0 +1,47 @@
+# ShaGa IPTV Player for Android — GitHub Actions build
+# Builds the debug APK on every change in android/ and stores it as an artifact.
+# Собирает отладочный APK при каждом изменении в android/ и сохраняет его как артефакт
+# (вкладка Actions -> последний запуск -> раздел Artifacts).
+name: Android build
+
+on:
+  push:
+    paths:
+      - 'android/**'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # Gradle version is fixed here; the project has no wrapper script (gradlew),
+      # because files uploaded through the web interface lose the "executable" flag.
+      # Версия Gradle задана здесь; скрипта gradlew в проекте нет: при загрузке
+      # через веб-интерфейс теряется признак «исполняемый файл».
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: '8.13'
+
+      - name: Build debug APK
+        working-directory: android
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Name the APK by version
+        run: |
+          VER=$(grep -oP 'versionName\s*=\s*"\K[^"]+' android/app/build.gradle.kts)
+          cp android/app/build/outputs/apk/debug/app-debug.apk "shaga-iptv-player-$VER-android.apk"
+          echo "VER=$VER" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: shaga-iptv-player-${{ env.VER }}-android
+          path: shaga-iptv-player-${{ env.VER }}-android.apk
+          if-no-files-found: error
