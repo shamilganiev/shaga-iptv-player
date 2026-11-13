@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ShaGa IPTV Player for Android — window theme (dark, no title bar).
+     Тема окна (тёмная, без заголовка). Цвета — как в LG-версии. -->
+<resources>
+    <color name="bg">#141C2E</color>
+    <color name="amber">#F5B83D</color>
+
+    <style name="AppTheme" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:colorAccent">@color/amber</item>
+    </style>
+</resources>

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ShaGa IPTV Player for Android — AndroidManifest.xml
+     One app for Android TV (remote) and phones/tablets (touch).
+     Одно приложение для Android TV (пульт) и телефонов/планшетов (сенсор). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- TV: no touchscreen needed; phones: no leanback needed.
+         ТВ: сенсорный экран не нужен; телефоны: leanback не нужен. -->
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+
+    <!-- usesCleartextTraffic: many playlists and streams use http://
+         usesCleartextTraffic: многие плейлисты и потоки идут по http:// -->
+    <application
+        android:allowBackup="false"
+        android:banner="@drawable/banner"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:theme="@style/AppTheme"
+        android:usesCleartextTraffic="true">
+
+        <!-- configChanges: the screen is not restarted on rotation or keyboard changes.
+             configChanges: экран не перезапускается при повороте и смене клавиатуры. -->
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

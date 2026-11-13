@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ShaGa IPTV Player for Android — app name for the launcher.
+     Название для лаунчера. Остальные строки (EN/ES/RU) — в Strings.kt, как в Roku и LG. -->
+<resources>
+    <string name="app_name">ShaGa IPTV Player</string>
+</resources>
