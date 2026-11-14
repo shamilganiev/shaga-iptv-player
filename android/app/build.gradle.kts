@@ -15,9 +15,9 @@ android {
         applicationId = "com.shaga.player"
         minSdk = 24        // Android 7.0
         targetSdk = 36     // Android 16
-        // versionCode = MAJOR*10000 + MINOR*100 + PATCH  (0.1.0 -> 100)
-        versionCode = 100
-        versionName = "0.1.0"
+        // versionCode = MAJOR*10000 + MINOR*100 + PATCH  (0.2.0 -> 200)
+        versionCode = 200
+        versionName = "0.2.0"
     }
 
     // One fixed test key in the repository, so that every build from GitHub installs
@@ -62,6 +62,10 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+
+    // Channel logos: download and cache / Логотипы каналов: загрузка и кэш
+    implementation("io.coil-kt.coil3:coil-compose:3.3.0")
+    implementation("io.coil-kt.coil3:coil-network-okhttp:3.3.0")
 
     // Player: Media3 (ExoPlayer) / Плеер: Media3 (ExoPlayer)
     implementation("androidx.media3:media3-exoplayer:1.8.0")

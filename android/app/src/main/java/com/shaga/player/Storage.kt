@@ -1,7 +1,7 @@
 // ShaGa IPTV Player for Android — Storage.kt
 // Saved settings: one JSON file, the same scheme as the Roku registry and LG storage.
 // Сохранённые настройки: один JSON-файл, схема та же, что в реестре Roku и хранилище LG.
-//   { v, lastOkId, nextId, playlists[{id, name, url}] }
+//   { v, lastOkId, nextId, playlists[{id, name, url}], zapInvert }
 // 0.1.0 keeps one playlist; up to 5 come with the "Playlists" window.
 // В 0.1.0 хранится один плейлист; до 5 — вместе с окном «Плейлисты».
 package com.shaga.player
@@ -21,14 +21,21 @@ object Storage {
     var lastOkId = 0
     var nextId = 1
 
+    // Channel switching in full screen: true = Up goes to the lower number, as in the list
+    // (default); false = classic. The same name as in the LG version.
+    // Переключение каналов на полном экране: true = вверх к меньшему номеру, как в списке
+    // (по умолчанию); false = классическое. Имя то же, что в LG-версии.
+    var zapInvert = true
+
     fun load(ctx: Context) {
-        playlists.clear(); lastOkId = 0; nextId = 1
+        playlists.clear(); lastOkId = 0; nextId = 1; zapInvert = true
         try {
             val f = File(ctx.filesDir, FILE)
             if (!f.exists()) return
             val o = JSONObject(f.readText())
             lastOkId = o.optInt("lastOkId", 0)
             nextId = o.optInt("nextId", 1)
+            zapInvert = o.optBoolean("zapInvert", true)
             val arr = o.optJSONArray("playlists") ?: JSONArray()
             for (i in 0 until arr.length()) {
                 val p = arr.getJSONObject(i)
@@ -45,6 +52,7 @@ object Storage {
             val arr = JSONArray()
             for (p in playlists) arr.put(JSONObject().put("id", p.id).put("name", p.name).put("url", p.url))
             val o = JSONObject().put("v", VERSION).put("lastOkId", lastOkId).put("nextId", nextId).put("playlists", arr)
+                .put("zapInvert", zapInvert)
             // Write to a temporary file first, so that a failure cannot spoil the settings.
             // Сначала пишем во временный файл, чтобы сбой не испортил настройки.
             val tmp = File(ctx.filesDir, "$FILE.tmp")

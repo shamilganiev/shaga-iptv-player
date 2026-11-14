@@ -3,9 +3,9 @@
 https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8
 #EXTINF:-1 tvg-id="test-bbb" group-title="Test",Big Buck Bunny (Mux test)
 https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
-#EXTINF:-1 tvg-id="test-akamai-live" group-title="Test",Akamai live test
-https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8
-#EXTINF:-1 tvg-id="test-sintel" group-title="Movies (open)",Sintel (Blender, CC BY)
-https://bitdash-a.akamaihd.net/content/sintel/hls/playlist.m3u8
+#EXTINF:-1 tvg-id="test-bipbop-fmp4" group-title="Test",Apple BipBop fMP4 (HLS test)
+https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8
+#EXTINF:-1 tvg-id="test-blender-live" group-title="Movies (open)",Blender Open Movies 24/7 (live, CC BY)
+https://ireplay.tv/test/blender.m3u8
 #EXTINF:-1 tvg-id="test-tos" group-title="Movies (open)",Tears of Steel (Blender, CC BY)
 https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8
