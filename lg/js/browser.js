@@ -60,6 +60,8 @@ var Browser = {
     // Группа «По PIN»: без счётчика (как в Roku — «[PIN]» вместо числа)
     row._g.count.textContent = g.svc ? '' : g.locked ? '[PIN]' : g.count;
     row.classList.toggle('svc', !!g.svc);
+    // 1.4.1: группа, из которой запущено то, что играет
+    row.classList.toggle('playing', g.id !== undefined && !g.svc && Browser.isPlaying() && g.id === Player.gid);
   },
 
   // index — позиция в списке: в результатах поиска передач (gid «__find») по ней берётся передача
@@ -103,7 +105,43 @@ var Browser = {
     }
     c.lock.style.display = App.isLocked(ch.group) ? '' : 'none';
     c.star.style.display = App.isFav(ch) ? '' : 'none';
-    row.classList.toggle('playing', Player.isCurrent(ch));
+    // 1.4.1: в результатах поиска отмечается именно играющая передача, а не все строки канала
+    row.classList.toggle('playing', Browser.isPlaying() && Player.isCurrent(ch) && (!fp || Browser.isPlayingProg(fp)));
+  },
+
+  // ---------- 1.4.1: «где играет» ----------
+  fullFrom: 'channels',   // из какой колонки открыли полный экран: channels | prog
+
+  isPlaying: function () { return !!Player.ch && Player.state !== 'idle'; },
+
+  // Эта передача сейчас играет (архив — то же начало; эфир — идёт сейчас)
+  isPlayingProg: function (p) {
+    if (!p) return false;
+    if (Player.arch) return Player.arch.s === Math.floor(p.s / 1000);
+    var now = Date.now();
+    return p.s <= now && now < p.e;
+  },
+
+  // Играющая строка колонки каналов; -1 — её нет в списке
+  playingRow: function () {
+    if (!this.isPlaying()) return -1;
+    var items = this.chans.items;
+    for (var i = 0; i < items.length; i++) {
+      if (!Player.isCurrent(items[i])) continue;
+      if (this.gid !== '__find') return i;
+      if (this.isPlayingProg(App.find && App.find.progs[i])) return i;
+    }
+    return -1;
+  },
+
+  // Уходим из колонки каналов влево: курсор возвращается на играющую строку
+  returnToPlaying: function () {
+    var i = this.playingRow();
+    if (i < 0 || i === this.chans.index) return;
+    this.chans.setIndex(i);
+    this.memory[this.gid] = i;
+    if (this.gid === '__find') this.peekGuide(i); else this.scheduleInfo();
+    Log.info('UI список каналов вернулся к играющей строке');
   },
 
   // Строка программы: «> » у текущей, «вчера »/«завтра » у другого дня
@@ -118,6 +156,7 @@ var Browser = {
     marquee(row._p.title, p.t, row.classList.contains('focus'));
     row.classList.toggle('past', p.e <= now);
     row.classList.toggle('cur', cur);
+    row.classList.toggle('playing', Browser.isPlaying() && Player.isCurrent(Browser.progCh) && Browser.isPlayingProg(p));
   },
 
   dayPrefix: function (ms) {
@@ -211,12 +250,13 @@ var Browser = {
   refreshEpg: function () {
     if (App.screen !== this) return;
     this.chans.render();
-    if (this.panel === 'prog') this.progs.render();
+    if (this.progCh) this.progs.render();
     this.drawInfo();
   },
 
   // ---------- Программа канала (вправо из списка каналов) ----------
-  openGuide: function (ch) {
+  // want — передача, на которую поставить курсор (иначе — та, что в эфире)
+  openGuide: function (ch, want) {
     var list = EPG.all(ch);
     if (!list.length) {
       Log.info('Программа канала пуста: EPG ' + EPG.state);
@@ -228,6 +268,8 @@ var Browser = {
     this.progCh = ch;
     var now = Date.now(), at = 0;
     for (var i = 0; i < list.length; i++) { if (list[i].s <= now) at = i; else break; }
+    if (want) for (var k = 0; k < list.length; k++) if (want(list[k])) { at = k; break; }
+    this.peek = false;
     this.showGuideNodes(true);
     this.progs.setItems(list, at);
     this.focusPanel('prog');
@@ -267,7 +309,12 @@ var Browser = {
     var now = Date.now(), cur = p.s <= now && now < p.e;
     if (Player.isCurrent(ch) && Player.state !== 'error' && Player.state !== 'idle') {
       var same = Player.arch ? Player.arch.s === Math.floor(p.s / 1000) : cur;
-      if (same) { Log.info('Передача уже играет — полный экран'); App.show('player'); return; }
+      if (same) {
+        Log.info('Передача уже играет — полный экран');
+        this.fullFrom = this.panel === 'prog' ? 'prog' : 'channels';
+        App.show('player');
+        return;
+      }
     }
     if (cur) { this.playLive(ch); return; }
     if (p.e <= now) { this.playFromArchive(ch, p); return; }
@@ -290,6 +337,7 @@ var Browser = {
   },
 
   afterPlay: function () {
+    this.groups.render();
     this.chans.render();
     this.progs.render();
     this.drawHeads();
@@ -354,6 +402,18 @@ var Browser = {
     if (this.panel === 'channels') {
       if (!this.chans.items.length) return;
       var ch = this.chans.current(), cur = EPG.now(ch);
+      // 1.4.1: результат поиска — меню относится к НАЙДЕННОЙ передаче, а не к той, что в эфире
+      var fi = this.chans.index, fp = this.gid === '__find' && App.find ? App.find.progs[fi] : null;
+      if (fp) {
+        items.push({ label: t('ctxDesc'), action: function () { self.showDescription(fp); } });
+        if (fp.s <= now) items.push({ label: t('ctxWatch'), action: function () { self.actOnFound(fi); } });
+        items.push({ label: t(App.isFav(ch) ? 'ctxFavRemove' : 'ctxFavAdd'),
+                     action: function () { App.toggleFav(ch); self.refreshCounts(); } });
+        items.push({ label: t('ctxGoGroup'), action: function () { self.goToChannelGroup(ch); } });
+        items.push({ label: t('cancel') });
+        Menu.open(fp.t, '', items);
+        return;
+      }
       items.push({ label: t(App.isFav(ch) ? 'ctxFavRemove' : 'ctxFavAdd'),
                    action: function () { App.toggleFav(ch); self.refreshCounts(); } });
       items.push({ label: t('ctxDesc'), action: function () {
@@ -493,6 +553,10 @@ var Browser = {
     opts = opts || {};
     this.subMenu = null;
     this.buildGroups();
+    // 1.4.1: полный экран открыли из списка передач — возвращаемся туда же, на играющую передачу,
+    // чтобы повторный OK снова открыл полный экран, а не запустил что-то заново
+    var backProg = opts.fromPlayer && this.fullFrom === 'prog' && this.progCh && this.isPlaying() &&
+      Player.isCurrent(this.progCh) ? this.progCh : null;
     if (this.progCh) { this.peek = false; this.progCh = null; this.showGuideNodes(false); }
 
     var gid = this.gid, chIdx = null, panel = this.panel === 'prog' ? 'channels' : this.panel;
@@ -521,14 +585,20 @@ var Browser = {
     }
 
     if (opts.fromPlayer && Player.ch) {
-      var items = this.chans.items;
-      for (var i = 0; i < items.length; i++) {
-        if (Player.isCurrent(items[i])) { chIdx = i; break; }
+      var pr = this.playingRow();
+      if (pr >= 0) chIdx = pr;
+      if (chIdx !== null) {
+        this.chans.setIndex(chIdx);
+        this.memory[this.gid] = chIdx;
+        if (this.gid === '__find') this.peekGuide(chIdx);
       }
-      if (chIdx !== null) { this.chans.setIndex(chIdx); this.memory[this.gid] = chIdx; }
     }
     this.panel = null;
     this.focusPanel(panel);
+    if (backProg && this.chans.items.length && Player.isCurrent(this.chans.current())) {
+      var self = this;
+      this.openGuide(backProg, function (p) { return self.isPlayingProg(p); });
+    }
     this.drawHeads();
   },
 
@@ -540,7 +610,10 @@ var Browser = {
       case K.DOWN: list.move(1); return true;
       case K.CHUP: list.page(-1); return true;
       case K.CHDN: list.page(1); return true;
-      case K.LEFT: this.focusPanel('groups'); return true;
+      case K.LEFT:
+        if (this.panel === 'channels') this.returnToPlaying();
+        this.focusPanel('groups');
+        return true;
       case K.RIGHT:
         if (this.panel === 'groups') { if (!this.subMenu) this.enterGroup(); }
         else if (this.gid === '__find' && this.progCh) this.focusPanel('prog');   // в программу канала, на найденную передачу
@@ -551,7 +624,7 @@ var Browser = {
         else if (this.gid === '__find') this.actOnFound(this.chans.index);
         else if (this.chans.items.length) {
           var ch = this.chans.current();
-          if (Player.isCurrent(ch) && Player.state !== 'error') App.show('player');
+          if (Player.isCurrent(ch) && Player.state !== 'error') { this.fullFrom = 'channels'; App.show('player'); }
           else App.playFrom(this.chans.items, this.chans.index, this.gid);
         }
         return true;
@@ -566,8 +639,8 @@ var Browser = {
       // Back отматывает по шагу: каналы → группы → остановить видео → предложить закрыть
       case K.BACK:
         if (this.panel === 'groups' && this.subMenu) { this.closeSearchMenu(); return true; }
-        if (this.panel === 'channels') this.focusPanel('groups');
-        else if (Player.ch) { Player.stop(); this.chans.render(); this.drawHeads(); }
+        if (this.panel === 'channels') { this.returnToPlaying(); this.focusPanel('groups'); }
+        else if (Player.ch) { Player.stop(); this.groups.render(); this.chans.render(); if (this.progCh) this.progs.render(); this.drawHeads(); }
         else App.confirmExit();
         return true;
     }

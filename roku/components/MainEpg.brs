@@ -83,6 +83,7 @@ sub onEpgNow()
     refreshRows(40)
     refreshInfoPanel()
     updateChanHeader()
+    markPlaying()      ' the programme on air may have changed / передача в эфире могла смениться
     if m.mode = "full" and m.osd.visible then showOsd()
 end sub
 

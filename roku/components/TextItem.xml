@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ShaGa IPTV Player — free player for your own M3U/M3U8 playlists -->
+<!-- ShaGa IPTV Player — бесплатный плеер для собственных плейлистов M3U/M3U8 -->
+<!-- 1.4.1: one text row for the group list and the programme list (they were LabelList).
+     A row of what is playing gets a background: grey when the list has no focus,
+     soft violet when the list has the focus and the cursor is on another row. -->
+<!-- 1.4.1: текстовая строка для списка групп и списка передач (раньше был LabelList).
+     Строка того, что играет, получает фон: серый, когда список без фокуса,
+     мягкий фиолетовый, когда список в фокусе, а курсор на другой строке. -->
+<!-- ContentNode fields / Поля ContentNode: title, playing (boolean) -->
+<component name="TextItem" extends="Group">
+    <interface>
+        <field id="itemContent" type="node" onChange="onContent" />
+        <field id="focusPercent" type="float" onChange="onFocus" />
+        <field id="listHasFocus" type="boolean" onChange="onFocus" />
+        <field id="width" type="float" onChange="onSize" />
+        <field id="height" type="float" onChange="onSize" />
+    </interface>
+    <script type="text/brightscript" uri="TextItem.brs" />
+    <children>
+        <Rectangle id="playBg" translation="[0,2]" width="0" height="0" color="0x3C3A48FF" visible="false" />
+        <Label id="text" translation="[18,0]" vertAlign="center" color="0xECE9F6FF" />
+    </children>
+</component>

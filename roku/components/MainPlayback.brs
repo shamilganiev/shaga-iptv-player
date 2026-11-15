@@ -65,6 +65,12 @@ sub playStream(ix as integer, url as string, live as boolean)
     if ch.rf <> "" then headers.push("Referer:" + ch.rf)
     if headers.Count() > 0 then c.HttpHeaders = headers
     m.playingIx = ix
+    ' 1.4.1: remember the category the playback was started from (for the mark in the group list)
+    ' 1.4.1: запоминаем категорию, из которой запустили (для отметки в списке групп)
+    if m.view = "channels" and m.curCat >= 0 then
+        k = catKeyAt(m.curCat)
+        if k <> "" then m.playCatKey = k
+    end if
     m.lastError = ""
     m.video.control = "stop"
     m.video.content = c
@@ -77,6 +83,7 @@ sub playStream(ix as integer, url as string, live as boolean)
     updateChanHeader()
     refreshInfoPanel()
     checkOpenGroup()
+    markPlaying()
     if m.mode = "full" then showOsd()
 end sub
 
@@ -99,6 +106,7 @@ sub stopVideo()
     m.video.visible = false
     updateChanHeader()
     refreshInfoPanel()
+    markPlaying()
 end sub
 
 sub onVideoState()
@@ -197,6 +205,7 @@ end sub
 
 sub enterFull()
     if m.playingIx < 0 then return
+    m.fullFrom = m.focusArea
     m.mode = "full"
     m.mainGroup.visible = false
     m.video.translation = [0, 0]
@@ -215,9 +224,18 @@ sub exitFull()
     setVideoWindow()
     if m.vSpinner.visible then onSpinTimer()
     m.mainGroup.visible = true
-    posInCat = indexOfChannel(m.playingIx)
-    if posInCat >= 0 then m.chanList.jumpToItem = posInCat
-    focusArea("chan")
+    ' 1.4.1: back to the row the video was started from, so that OK opens the full screen
+    ' again instead of restarting (programme list, search result or channel).
+    ' 1.4.1: возвращаемся на строку, с которой запустили, чтобы OK снова открыл полный экран,
+    ' а не перезапустил показ (список передач, результат поиска или канал).
+    if m.fullFrom = "prog" and m.progList.visible and m.progIx = m.playingIx and not m.findPeek then
+        focusArea("prog")
+    else
+        if m.progList.visible and not m.findPeek then closeGuide()
+        posInCat = playingRow()
+        if posInCat >= 0 then m.chanList.jumpToItem = posInCat
+        focusArea("chan")
+    end if
     updatePreviewStatus()
     dbg("UI", "main screen")
 end sub
@@ -262,6 +280,7 @@ sub zap(delta as integer)
     posInCat = indexOfChannel(m.playingIx)
     if posInCat < 0 then posInCat = 0 else posInCat = (posInCat + delta + n) mod n
     m.chanList.jumpToItem = posInCat
+    m.fullFrom = "chan"
     playChannel(m.curIdx[posInCat])
 end sub
 

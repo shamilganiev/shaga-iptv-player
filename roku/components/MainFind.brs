@@ -52,7 +52,7 @@ end sub
 sub renderSearchMenu()
     items = []
     for each c in m.subCats
-        items.push({ title: c.label })
+        items.push({ title: c.label, playing: false })
     end for
     root = CreateObject("roSGNode", "ContentNode")
     root.Update({ children: items }, true)
@@ -143,6 +143,7 @@ sub runFind(kind as string, query as string)
         end if
     end for
     m.findBusy = true
+    m.chanHeader.text = m.S.searching     ' 1.4.1: the search takes a few seconds / поиск идёт несколько секунд
     dbg("UI", "search " + kind + " '" + normText(query) + "' in " + keys.Count().ToStr() + " channels")
     m.epgSvc.findReq = { kind: kind, q: query, keys: keys }
 end sub
@@ -151,6 +152,7 @@ sub onFindAns()
     a = m.epgSvc.findAns
     if a = invalid or not m.findBusy then return
     m.findBusy = false
+    updateChanHeader()
     items = []
     idx = []
     for each it in a.items
@@ -178,6 +180,8 @@ sub onFindAns()
     i = catIndexByKind("find")
     m.catList.jumpToItem = i
     showCategory(i)
+    ' Fresh results: the cursor on the first one / Свежие результаты: курсор на первом
+    if m.chanList.itemFocused <> 0 then m.chanList.jumpToItem = 0
     focusArea("chan")
 end sub
 
@@ -246,15 +250,20 @@ sub showFindCategory()
         else if it.s <= now then
             cat = 1
         end if
-        items.push({ title: ch.t, HDPosterUrl: ch.l, shortDescriptionLine1: (m.findIdx[p] + 1).ToStr(), shortDescriptionLine2: it.t, epgS: 0, epgE: 0, epgT: 0, findLine: findDateLine(it.s), findCat: cat })
+        items.push({ title: ch.t, HDPosterUrl: ch.l, shortDescriptionLine1: (m.findIdx[p] + 1).ToStr(), shortDescriptionLine2: it.t, epgS: 0, epgE: 0, epgT: 0, findLine: findDateLine(it.s), findCat: cat, playing: false })
     end for
     root = CreateObject("roSGNode", "ContentNode")
     root.Update({ children: items }, true)
     m.chanList.content = root
-    m.chanList.jumpToItem = 0
-    showPreviewInfo(m.findIdx[0])
+    ' 1.4.1: the cursor starts on the result that plays, else on the first one
+    ' 1.4.1: курсор встаёт на результат, который играет, иначе на первый
+    p0 = playingRow()
+    if p0 < 0 then p0 = 0
+    m.chanList.jumpToItem = p0
+    showPreviewInfo(m.findIdx[p0])
     updateChanHeader()
-    peekFound(0)
+    markPlaying()
+    peekFound(p0)
 end sub
 
 ' Guide of the result's channel in column 3, found programme in the middle, focus stays here

@@ -322,6 +322,7 @@ var Player = {
     var ch = this.list[i], self = this;
     App.guardPlay(ch, function () {
       self.idx = i;
+      Browser.fullFrom = 'channels';   // 1.4.1: после переключения возвращаемся в список каналов
       self.start(ch);
     });
   },

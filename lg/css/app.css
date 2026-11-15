@@ -164,8 +164,13 @@ body.has-video #browser {
   cursor: pointer;
   white-space: nowrap;
 }
+/* 1.4.1: строка того, что играет: сероватая в колонке без фокуса, мягкая янтарная в колонке
+   с фокусом (пока курсор на другой строке). Курсор (.focus) и след курсора (.sel) — поверх. */
+.vrow.playing { background: #454C5E; }
+.vlist.active .vrow.playing { background: rgba(245, 184, 61, .26); }
 .vrow.sel { background: var(--panel-2); box-shadow: inset 6px 0 0 var(--amber); }
-.vrow.focus { background: var(--amber); color: var(--ink); }
+.vrow.sel.playing { background: #454C5E; }
+.vrow.focus, .vlist.active .vrow.focus { background: var(--amber); color: var(--ink); }
 
 /* Группы */
 .g-row { padding: 0 20px 0 26px; }

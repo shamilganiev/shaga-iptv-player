@@ -18,6 +18,7 @@
     <script type="text/brightscript" uri="MainEpg.brs" />
     <script type="text/brightscript" uri="MainGuide.brs" />
     <script type="text/brightscript" uri="MainFind.brs" />
+    <script type="text/brightscript" uri="MainMark.brs" />
     <script type="text/brightscript" uri="pkg:/source/catchup.brs" />
     <script type="text/brightscript" uri="pkg:/source/config.brs" />
     <script type="text/brightscript" uri="pkg:/source/log.brs" />
@@ -39,8 +40,9 @@
             <Label id="chanHeader" translation="[580,108]" width="620" color="0xA995FFFF" font="font:SmallBoldSystemFont" />
             <ScrollingLabel id="videoHeader" translation="[1240,108]" maxWidth="580" color="0xA995FFFF" font="font:SmallBoldSystemFont" />
 
-            <LabelList id="catList" translation="[100,156]" itemSize="[440,58]" numRows="13"
-                color="0xECE9F6FF" focusedColor="0x14121CFF"
+            <!-- 1.4.1: MarkupList + TextItem (was LabelList) so that the playing row can be marked -->
+            <!-- 1.4.1: MarkupList + TextItem (был LabelList), чтобы отмечать играющую строку -->
+            <MarkupList id="catList" translation="[100,156]" itemComponentName="TextItem" itemSize="[440,58]" numRows="13"
                 focusBitmapUri="pkg:/images/focus.9.png" vertFocusAnimationStyle="floatingFocus" />
 
             <MarkupList id="chanList" translation="[580,156]" itemComponentName="ChannelItem"
@@ -68,8 +70,7 @@
             <Label id="nextList" translation="[1240,800]" width="580" height="108" wrap="true" maxLines="4"
                 color="0xD0CCE0FF" font="font:SmallestSystemFont" />
             <!-- Programme list of one channel (Right from the channel list) / Список передач канала -->
-            <LabelList id="progList" translation="[1240,572]" itemSize="[580,46]" numRows="6" visible="false"
-                color="0xECE9F6FF" focusedColor="0x14121CFF" font="font:SmallestSystemFont"
+            <MarkupList id="progList" translation="[1240,572]" itemComponentName="TextItem" itemSize="[580,46]" numRows="6" visible="false"
                 focusBitmapUri="pkg:/images/focus.9.png" vertFocusAnimationStyle="floatingFocus" />
             <Label id="progDesc" translation="[1240,852]" width="580" height="90" wrap="true" maxLines="3" visible="false"
                 color="0xA39DB8FF" font="font:SmallestSystemFont" />

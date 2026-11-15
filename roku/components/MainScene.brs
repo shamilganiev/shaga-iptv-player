@@ -121,6 +121,7 @@ sub init()
     epgInit()
     guideInit()
     findInit()
+    markInit()
 
     ' --- saved data and language / сохранённые данные и язык ---
     m.data = storageLoad()
@@ -601,18 +602,20 @@ sub buildCategories(focusIndex as integer)
     end if
     items = []
     for each c in m.cats
-        items.push({ title: c.label })
+        items.push({ title: c.label, playing: false })
     end for
     root = CreateObject("roSGNode", "ContentNode")
     root.Update({ children: items }, true)
     ' The search menu stays in the left column while it is open / Меню поиска остаётся в левой колонке
     if m.catSub <> "" then
         renderSearchMenu()
+        markPlaying()
         return
     end if
     m.catList.content = root
     if focusIndex >= 0 and focusIndex < m.cats.Count() then m.catList.jumpToItem = focusIndex
     updateCatHeader()
+    markPlaying()
 end sub
 
 ' Index of the first channel category / Первая категория с каналами
@@ -726,6 +729,7 @@ sub showCategory(i as integer)
         showMessage("", false)
         clearPreview()
         updateChanHeader()
+        markPlaying()
         return
     end if
     if c.kind = "all" then
@@ -745,7 +749,7 @@ sub showCategory(i as integer)
     items = []
     for each k in idx
         ch = m.channels[k]
-        items.push({ title: ch.t, HDPosterUrl: ch.l, shortDescriptionLine1: (k + 1).ToStr(), shortDescriptionLine2: "", epgS: 0, epgE: 0 })
+        items.push({ title: ch.t, HDPosterUrl: ch.l, shortDescriptionLine1: (k + 1).ToStr(), shortDescriptionLine2: "", epgS: 0, epgE: 0, playing: false })
     end for
     root = CreateObject("roSGNode", "ContentNode")
     root.Update({ children: items }, true)
@@ -761,6 +765,7 @@ sub showCategory(i as integer)
         clearPreview()
     end if
     updateChanHeader()
+    markPlaying()
 end sub
 
 ' Position of a channel in the current category, -1 if absent / Позиция канала в категории
@@ -935,6 +940,12 @@ function onKeyEvent(key as string, press as boolean) as boolean
     if not press then return false
     ' Description window: OK, Back or * close it / Окно описания: OK, Назад или * закрывают
     if m.descOpen then
+        ' 1.4.1: the OK that opened the window from a list also comes here — it must not close it
+        ' 1.4.1: OK, которым окно открыли из списка, приходит и сюда — он не должен его закрыть
+        if key = "OK" and m.okFromList then
+            m.okFromList = false
+            if m.okClock.TotalMilliseconds() < 1000 then return true
+        end if
         if key = "OK" or key = "back" or key = "options" then closeDescription()
         return true
     end if
@@ -989,7 +1000,10 @@ function onKeyEvent(key as string, press as boolean) as boolean
         else if key = "down" or key = "channelDown" then
             zap(zapDelta(false))
         else if key = "OK" then
-            showOsd()
+            ' 1.4.1: OK folds the video back to the lists; OK there opens the full screen again
+            ' 1.4.1: OK сворачивает видео обратно к спискам; OK там снова открывает полный экран
+            dbg("UI", "OK: fold the full screen")
+            exitFull()
         else if key = "left" then
             seekBy(-10)
         else if key = "right" then
@@ -1037,6 +1051,7 @@ function onKeyEvent(key as string, press as boolean) as boolean
         if m.focusArea = "chan" then
             if settingsBack() then return true
             if m.view = "settings" then leaveSettings(true)
+            returnToPlaying()
             focusArea("cat")
         else if m.playingIx >= 0 then
             dbg("UI", "back: stop video")
@@ -1047,10 +1062,19 @@ function onKeyEvent(key as string, press as boolean) as boolean
         end if
         return true
     else if key = "right" and m.focusArea = "cat" then
+        ' 1.4.1: the cursor left on a menu row goes back to the shown category
+        ' 1.4.1: курсор, оставленный на строке меню, возвращается на показанную категорию
+        if m.catSub = "" and m.view = "channels" and m.curCat >= 0 and m.curIdx.Count() > 0 then
+            i = m.catList.itemFocused
+            if i >= 0 and i < m.cats.Count() and i <> m.curCat then
+                if m.cats[i].kind = "action" then m.catList.jumpToItem = m.curCat
+            end if
+        end if
         focusArea("chan")
         return true
     else if key = "left" and m.focusArea = "chan" then
         if m.view = "settings" then leaveSettings(true)
+        returnToPlaying()
         focusArea("cat")
         return true
     else if key = "play" then

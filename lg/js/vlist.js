@@ -111,6 +111,8 @@ VList.prototype.page = function (dir) {
 VList.prototype.setActive = function (a) {
   if (this.active === a) return;
   this.active = a;
+  // 1.4.1: класс «active» у списка в фокусе — по нему красится строка того, что играет
+  this.el.classList.toggle('active', !!a);
   this.render();
 };
 

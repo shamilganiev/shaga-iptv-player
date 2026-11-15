@@ -21,6 +21,8 @@ sub init()
     m.progBg = m.top.findNode("progBg")
     m.progBar = m.top.findNode("progBar")
     m.findLabel = m.top.findNode("findLine")
+    m.playBg = m.top.findNode("playBg")
+    m.playing = false
     m.isFind = false
     m.findCat = 0
     m.isDark = false
@@ -32,6 +34,7 @@ sub onContent()
     if m.watched <> invalid then
         m.watched.unobserveFieldScoped("shortDescriptionLine2")
         m.watched.unobserveFieldScoped("epgT")
+        m.watched.unobserveFieldScoped("playing")
     end if
     m.watched = c
     if c = invalid then return
@@ -39,6 +42,8 @@ sub onContent()
     ' 1.3.7: the scene changes epgT every minute, so the bar moves (it was drawn once before)
     ' 1.3.7: сцена меняет epgT каждую минуту — полоска двигается (раньше рисовалась один раз)
     if c.hasField("epgT") then c.observeFieldScoped("epgT", "onProgramme")
+    ' 1.4.1: the scene sets "playing" on the row of what is playing / сцена ставит "playing" у играющей строки
+    if c.hasField("playing") then c.observeFieldScoped("playing", "onPlaying")
     m.numLabel.text = c.shortDescriptionLine1
     m.titleLabel.text = c.title
     m.logo.uri = c.HDPosterUrl
@@ -52,12 +57,35 @@ sub onContent()
         m.findCat = c.findCat
         m.numLabel.height = 124
         m.logo.translation = [98, 44]
+        m.playBg.height = 120
     else
         m.numLabel.height = 84
         m.logo.translation = [98, 24]
+        m.playBg.height = 80
     end if
     paintFind()
+    onPlaying()
     onProgramme()
+end sub
+
+' 1.4.1: background of the playing row: grey when the list has no focus, soft violet when
+' it has the focus and the cursor is on another row (the focus bar itself covers its row).
+' 1.4.1: фон играющей строки: серый, когда список без фокуса, мягкий фиолетовый, когда
+' список в фокусе, а курсор на другой строке (под самим курсором фон не нужен).
+sub onPlaying()
+    c = m.top.itemContent
+    m.playing = false
+    if c <> invalid and c.hasField("playing") then m.playing = (c.playing = true)
+    paintPlaying()
+end sub
+
+sub paintPlaying()
+    m.playBg.visible = (m.playing and not m.isDark)
+    if m.top.listHasFocus = true then
+        m.playBg.color = "0x4B4285FF"
+    else
+        m.playBg.color = "0x3C3A48FF"
+    end if
 end sub
 
 sub onProgramme()
@@ -93,8 +121,12 @@ end sub
 ' Dark text on the focus bar, light text elsewhere / Тёмный текст на рамке фокуса
 sub onFocus()
     dark = (m.top.listHasFocus = true and m.top.focusPercent > 0.5)
-    if dark = m.isDark then return
+    if dark = m.isDark then
+        paintPlaying()
+        return
+    end if
     m.isDark = dark
+    paintPlaying()
     paintFind()
     ' Focused row: scrolling programme line instead of the cut one / Выделенная строка: бегущая строка вместо обрезанной
     m.progScroll.visible = dark

@@ -18,6 +18,8 @@
     </interface>
     <script type="text/brightscript" uri="ChannelItem.brs" />
     <children>
+        <!-- 1.4.1: background of the playing row (grey / soft violet) / фон играющей строки (серый / мягкий фиолетовый) -->
+        <Rectangle id="playBg" translation="[0,2]" width="620" height="80" color="0x3C3A48FF" visible="false" />
         <!-- Number column fits 4 digits / Колонка номера под 4 цифры -->
         <Label id="num" translation="[0,0]" width="84" height="84" horizAlign="right" vertAlign="center"
             font="font:SmallSystemFont" color="0xA39DB8FF" />

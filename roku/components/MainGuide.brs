@@ -44,7 +44,7 @@ sub openGuide(ix as integer)
     end if
     m.progIx = ix
     m.epgSvc.listKey = epgKeyOf(m.channels[ix])
-    dbg("UI", "TV guide of #" + (ix + 1).ToStr())
+    if not m.findPeek then dbg("UI", "TV guide of #" + (ix + 1).ToStr())
 end sub
 
 sub onEpgList()
@@ -72,13 +72,14 @@ sub onEpgList()
         else if it.e <= now then
             cur = i + 1
         end if
-        items.push({ title: mark + dayPrefix(it.s) + hhmm(it.s) + "   " + it.t })
+        items.push({ title: mark + dayPrefix(it.s) + hhmm(it.s) + "   " + it.t, playing: false })
     end for
     if cur >= items.Count() then cur = items.Count() - 1
     root = CreateObject("roSGNode", "ContentNode")
     root.Update({ children: items }, true)
     m.progList.content = root
     showGuideNodes(true)
+    markPlaying()
     ' 1.4.0: from the search — the found programme in the middle of the list
     ' 1.4.0: из поиска — найденная передача в середине списка
     if m.findWant > 0 then
@@ -115,6 +116,7 @@ sub closeGuide()
     m.progIx = -1
     m.progItems = []
     showGuideNodes(false)
+    markPlaying()
     focusArea("chan")
     refreshInfoPanel()
     if m.findShown then peekFound(m.chanList.itemFocused)
@@ -287,6 +289,24 @@ sub openContextMenu()
         ix = focusedChannel()
         if ix < 0 then return
         ch = m.channels[ix]
+        ' 1.4.1: search result — the menu is about the FOUND programme, not the one on air
+        ' 1.4.1: результат поиска — меню относится к НАЙДЕННОЙ передаче, а не к той, что в эфире
+        if m.findShown and m.findItems <> invalid then
+            p = m.chanList.itemFocused
+            if p < 0 or p >= m.findItems.Count() then return
+            it = m.findItems[p]
+            acts = [{ a: "progdesc", t: m.S.ctxDesc }]
+            now = CreateObject("roDateTime").AsSeconds()
+            if it.s <= now then acts.push({ a: "watch", t: m.S.ctxWatch })
+            if m.favSet.DoesExist(ch.t) then
+                acts.push({ a: "fav", t: m.S.ctxFavRemove })
+            else
+                acts.push({ a: "fav", t: m.S.ctxFavAdd })
+            end if
+            acts.push({ a: "group", t: m.S.ctxGoGroup })
+            showContext(it.t, acts, { ix: ix, item: it, key: epgKeyOf(ch) })
+            return
+        end if
         acts = []
         if m.favSet.DoesExist(ch.t) then
             acts.push({ a: "fav", t: m.S.ctxFavRemove })
@@ -343,8 +363,13 @@ sub onContextButton(b as integer, ctx as object)
     else if a = "group" then
         goToChannelGroup(ctx.ix)
     else if a = "progdesc" then
-        showDescription(ctx.item, epgKeyOf(m.channels[m.progIx]))
+        if ctx.key <> invalid then
+            showDescription(ctx.item, ctx.key)
+        else if m.progIx >= 0 then
+            showDescription(ctx.item, epgKeyOf(m.channels[m.progIx]))
+        end if
     else if a = "watch" then
+        if ctx.ix <> invalid then m.progIx = ctx.ix
         actOnProgramme(ctx.item)
     else if a = "hide" then
         applyGroupMode(ctx.gi, "h", -1)
