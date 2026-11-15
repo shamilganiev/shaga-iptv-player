@@ -133,7 +133,7 @@ sub onDialogButton()
     else if kind = "search" then
         txt = keyboardText(m.dlgNode)
         closeDialog()
-        if b = 0 then runSearch(txt)
+        if b = 0 then runFindText(txt)
     else if kind.Left(3) = "pin" then
         onPinDialogButton(kind, b, ctx)
     else if kind = "groupMode" then

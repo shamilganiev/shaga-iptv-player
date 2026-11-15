@@ -6,6 +6,14 @@ The app contains no channels: you add a link to a playlist you are allowed to us
 Бесплатный плеер для ваших собственных плейлистов M3U/M3U8 — для **Roku** и **LG webOS**.
 В приложении нет каналов: вы добавляете ссылку на плейлист, которым вправе пользоваться.
 
+## Versions / Версии
+
+| Platform | Latest version |
+|---|---|
+| Roku | 1.4.0 |
+| LG webOS | 1.4.0 |
+| Android | — (planned / в планах) |
+
 ## Folders / Папки
 
 | Folder | What |

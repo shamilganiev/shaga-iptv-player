@@ -40,6 +40,7 @@ sub init()
     m.beaconSent = false
     m.pendingDL = invalid
     m.searchIdx = invalid
+    m.findItems = invalid
     m.searchQuery = ""
     m.dialogOpen = false
     m.dlgNode = invalid
@@ -119,6 +120,7 @@ sub init()
     applyDialogPalette()
     epgInit()
     guideInit()
+    findInit()
 
     ' --- saved data and language / сохранённые данные и язык ---
     m.data = storageLoad()
@@ -219,6 +221,10 @@ end sub
 ' ---------- column headers / заголовки колонок ----------
 
 sub updateCatHeader()
+    if m.catSub <> "" then
+        m.catHeader.text = m.S.menuSearch
+        return
+    end if
     i = m.catList.itemFocused
     if i >= 0 and i < m.cats.Count() then
         m.catHeader.text = m.cats[i].label
@@ -412,6 +418,7 @@ sub applyChannels(r as object, name as string)
     m.channels = r.channels
     m.groups = r.groups
     m.searchIdx = invalid
+    m.findItems = invalid
     m.searchQuery = ""
     m.currentId = r.playlistId
     m.openGroup = invalid
@@ -439,6 +446,7 @@ sub swapChannels(r as object, name as string)
     m.channels = r.channels
     m.groups = r.groups
     m.searchIdx = invalid
+    m.findItems = invalid
     m.playingIx = -1
     if playKey <> invalid then
         k = findChannel(playKey.t, playKey.g)
@@ -507,6 +515,7 @@ sub clearChannels()
     m.refreshAfterPlay = ""
     m.openGroup = invalid
     m.searchIdx = invalid
+    m.findItems = invalid
     m.searchQuery = ""
     m.curIdx = []
     m.curCat = -1
@@ -585,6 +594,7 @@ sub buildCategories(focusIndex as integer)
         if m.searchIdx <> invalid then
             m.cats.push({ kind: "search", label: m.S.searchPrefix + " " + m.searchQuery + "  (" + m.searchIdx.Count().ToStr() + ")" })
         end if
+        if m.findItems <> invalid then m.cats.push({ kind: "find", label: findCatLabel() })
         m.cats.push({ kind: "fav", label: m.S.favorites + "  (" + m.favIdx.Count().ToStr() + ")" })
         m.cats.push({ kind: "all", label: m.S.allChannels + "  (" + m.allIdx.Count().ToStr() + ")" })
         m.cats.Append(groupCats)
@@ -595,6 +605,11 @@ sub buildCategories(focusIndex as integer)
     end for
     root = CreateObject("roSGNode", "ContentNode")
     root.Update({ children: items }, true)
+    ' The search menu stays in the left column while it is open / Меню поиска остаётся в левой колонке
+    if m.catSub <> "" then
+        renderSearchMenu()
+        return
+    end if
     m.catList.content = root
     if focusIndex >= 0 and focusIndex < m.cats.Count() then m.catList.jumpToItem = focusIndex
     updateCatHeader()
@@ -659,6 +674,7 @@ end sub
 ' Debounced: rebuild channels only after the user stops scrolling
 ' С задержкой: перестраиваем каналы, когда пользователь перестал листать
 sub onCatTimer()
+    if m.catSub <> "" then return
     if m.view <> "channels" then return
     i = m.catList.itemFocused
     if i < 0 or i >= m.cats.Count() then return
@@ -669,12 +685,16 @@ end sub
 sub onCatSelected()
     markOkFromList()
     i = m.catList.itemSelected
+    if m.catSub <> "" then
+        onSearchMenuSelected(i)
+        return
+    end if
     if i < 0 or i >= m.cats.Count() then return
     c = m.cats[i]
     dbg("KEY", "category OK #" + i.ToStr() + " kind=" + c.kind)
     if c.kind = "action" then
         if c.action = "search" then
-            openSearchKeyboard()
+            openSearchMenu()
         else if c.action = "playlists" then
             openPlaylistsDialog()
         else if c.action = "language" then
@@ -694,6 +714,11 @@ end sub
 sub showCategory(i as integer)
     c = m.cats[i]
     m.curCat = i
+    if c.kind = "find" then
+        showFindCategory()
+        return
+    end if
+    setFindLayout(false)
     if c.kind = "group" and not groupIsOpen(c.gi) then
         ' Locked group: no channel names until the PIN / Закрытая группа: без названий до PIN-кода
         m.curIdx = []
@@ -755,6 +780,10 @@ sub onChanFocused()
     if p < 0 or p >= m.curIdx.Count() then return
     showPreviewInfo(m.curIdx[p])
     updateChanHeader()
+    if m.findShown then
+        peekFound(p)
+        return
+    end if
     refreshRows(12)
 end sub
 
@@ -766,6 +795,10 @@ sub onChanSelected()
         return
     end if
     if p < 0 or p >= m.curIdx.Count() then return
+    if m.findShown then
+        actOnFound(p)
+        return
+    end if
     ix = m.curIdx[p]
     dbg("KEY", "channel OK #" + (ix + 1).ToStr())
     if ix = m.playingIx and (m.videoState = "playing" or m.videoState = "buffering" or m.videoState = "paused") then
@@ -820,6 +853,7 @@ sub runSearch(query as string)
     if m.view <> "channels" then leaveSettings(false)
     m.searchIdx = res
     m.searchQuery = query
+    m.catSub = ""
     buildCategories(-1)
     i = catIndexByKind("search")
     m.catList.jumpToItem = i
@@ -829,12 +863,15 @@ end sub
 
 ' Channels of shown groups matching the query / Каналы показанных групп по запросу
 function searchIndexes(query as string) as object
-    qn = normText(query)
-    qf = fuzzTranslit(qn)
+    ' 1.4.0: masks * and ?, translit; channels of 18+ groups are never found
+    ' 1.4.0: маски * и ?, транслит; каналы групп 18+ не находятся никогда
     res = []
-    if qn = "" then return res
+    rx = buildFindRegex(query)
+    if rx = invalid then return res
+    adult = adultGroupFlags()
     for each k in m.allIdx
-        if keyMatches(m.channels[k].k, qn, qf) then res.push(k)
+        ch = m.channels[k]
+        if not adult[ch.gi] and rx.IsMatch(ch.t) then res.push(k)
     end for
     return res
 end function
@@ -981,11 +1018,22 @@ function onKeyEvent(key as string, press as boolean) as boolean
         closeGuide()
         return true
     else if key = "right" and m.focusArea = "chan" and m.view = "channels" then
+        ' In search results: the guide of the found programme takes the focus
+        ' В результатах поиска: фокус переходит в программу канала на найденную передачу
+        if m.findShown and m.findItems <> invalid then
+            p = m.chanList.itemFocused
+            if p >= 0 and p < m.findItems.Count() then m.findWant = m.findItems[p].s
+            m.findPeek = false
+        end if
         openGuide(focusedChannel())
         return true
     else if key = "back" then
         ' Step back: (programme list ->) channels -> groups -> stop video -> exit window
         ' Шаг назад: (список передач ->) каналы -> группы -> остановить видео -> окно выхода
+        if m.focusArea = "cat" and m.catSub <> "" then
+            closeSearchMenu("")
+            return true
+        end if
         if m.focusArea = "chan" then
             if settingsBack() then return true
             if m.view = "settings" then leaveSettings(true)

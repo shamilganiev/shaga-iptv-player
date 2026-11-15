@@ -65,6 +65,13 @@ VList.prototype.addRow = function (slot) {
   this.pool.push(row);
 };
 
+// 1.4.0: другая высота строк (результаты поиска передач выше обычных строк каналов)
+VList.prototype.setRowH = function (h) {
+  if (this.rowH === h) return;
+  this.rowH = h;
+  for (var i = 0; i < this.pool.length; i++) this.pool[i].style.height = (h - 6) + 'px';
+};
+
 VList.prototype.clamp = function (i) {
   if (!this.items.length) return 0;
   return Math.max(0, Math.min(this.items.length - 1, i));

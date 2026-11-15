@@ -79,8 +79,22 @@ sub onEpgList()
     root.Update({ children: items }, true)
     m.progList.content = root
     showGuideNodes(true)
-    m.progList.jumpToItem = cur
+    ' 1.4.0: from the search — the found programme in the middle of the list
+    ' 1.4.0: из поиска — найденная передача в середине списка
+    if m.findWant > 0 then
+        for i = 0 to m.progItems.Count() - 1
+            if m.progItems[i].s = m.findWant then
+                cur = i
+                exit for
+            end if
+        end for
+        m.findWant = 0
+        centerProgramme(cur, items.Count())
+    else
+        m.progList.jumpToItem = cur
+    end if
     onProgFocused()
+    if m.findPeek then return      ' shown under the search results, the focus stays there / фокус остаётся в результатах
     focusArea("prog")
 end sub
 
@@ -103,6 +117,7 @@ sub closeGuide()
     showGuideNodes(false)
     focusArea("chan")
     refreshInfoPanel()
+    if m.findShown then peekFound(m.chanList.itemFocused)
 end sub
 
 sub onProgFocused()
@@ -259,6 +274,7 @@ end function
 ' ---------- context menu on * / контекстное меню по * ----------
 
 sub openContextMenu()
+    if m.catSub <> "" and m.focusArea = "cat" then return
     if m.focusArea = "prog" then
         i = m.progList.itemFocused
         if i < 0 or i >= m.progItems.Count() then return

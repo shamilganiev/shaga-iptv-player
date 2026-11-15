@@ -114,3 +114,126 @@ function epgNorm(s as dynamic) as string
     end for
     return n
 end function
+
+' ---------- 1.4.0: search pattern with masks / шаблон поиска с масками ----------
+' The query becomes a regular expression applied to RAW titles (160 000 programme titles are
+' not normalized one by one — too slow on Roku). Rules:
+'   * — any number of any characters (also none), ? — exactly one character;
+'   a leading and a trailing * are always implied (substring search);
+'   letter case does not matter, е = ё; Latin letters also find Cyrillic (translit):
+'   "garri*potter" finds «Гарри Поттер и философский камень».
+' Non-ASCII letters are written as alternatives (а|А), never as [classes]: this works
+' whether the regex engine counts bytes or characters.
+' Запрос превращается в регулярное выражение по ИСХОДНЫМ названиям (нормализовать 160 000
+' названий по одному на Roku слишком долго). Правила: * — любое число любых символов (и ноль),
+' ? — ровно один символ; * в начале и в конце подразумевается всегда; регистр не важен,
+' е = ё; латиница находит и кириллицу (транслит).
+function findOneChar() as string
+    return "(?:[^\x80-\xBF][\x80-\xBF]*)"
+end function
+
+function upperCyr(ch as string) as string
+    c = Asc(ch)
+    if c >= &h0430 and c <= &h044F then return Chr(c - 32)
+    if c >= &h0450 and c <= &h045F then return Chr(c - 80)
+    if c >= &h00E0 and c <= &h00FE and c <> &h00F7 then return Chr(c - 32)
+    return ch
+end function
+
+' (?:x|X) for one lowercase non-ASCII letter; е also matches ё / для одной буквы; е = ё
+function findCyrAlt(ch as string) as string
+    u = upperCyr(ch)
+    if ch = "е" then return "(?:е|Е|ё|Ё)"
+    if u = ch then return ch
+    return "(?:" + ch + "|" + u + ")"
+end function
+
+function findLatinTable() as object
+    if m.findLat = invalid then
+        m.findLat = {
+            multi: [["shch", "щ"], ["sch", "щ"], ["sh", "ш"], ["ch", "ч"], ["zh", "ж"], ["kh", "х"], ["ts", "ц"], ["yu", "ю"], ["ya", "я"], ["yo", "е"], ["ye", "е"], ["ju", "ю"], ["ja", "я"]]
+            one: {
+                a: ["а"], b: ["б"], v: ["в"], w: ["в"], g: ["г"], d: ["д"], e: ["е", "э"], z: ["з"],
+                i: ["и", "й", "ы", "і"], y: ["й", "ы", "и"], j: ["й", "ж"], k: ["к"], l: ["л"], m: ["м"],
+                n: ["н"], o: ["о"], p: ["п"], r: ["р"], s: ["с"], t: ["т"], u: ["у"], f: ["ф"],
+                h: ["х", "г"], c: ["ц", "к", "с"], x: ["кс", "х"], q: ["к"]
+            }
+        }
+    end if
+    return m.findLat
+end function
+
+' One Latin letter: itself in both cases or its Cyrillic readings / Одна латинская буква
+function findLatinOne(ch as string) as string
+    alts = findLatinTable().one[ch]
+    out = "(?:[" + ch + UCase(ch) + "]"
+    if alts <> invalid then
+        for each a in alts
+            part = ""
+            for i = 1 to Len(a)
+                part = part + findCyrAlt(Mid(a, i, 1))
+            end for
+            out = out + "|" + part
+        end for
+    end if
+    return out + ")"
+end function
+
+' Returns a roRegex or invalid (empty query) / Возвращает roRegex или invalid (пустой запрос)
+function buildFindRegex(query as dynamic) as dynamic
+    q = normText(query)
+    while q.Left(1) = "*"
+        q = q.Mid(1)
+    end while
+    while q.Right(1) = "*"
+        q = q.Left(Len(q) - 1)
+    end while
+    q = q.Trim()
+    if q = "" then return invalid
+    tbl = findLatinTable()
+    soft = "(?:ь|Ь|ъ|Ъ)?"
+    special = "\.^$|()[]{}+-/"
+    out = ""
+    n = Len(q)
+    i = 1
+    while i <= n
+        ch = Mid(q, i, 1)
+        c = Asc(ch)
+        if ch = "*" then
+            out = out + ".*"
+            i = i + 1
+        else if ch = "?" then
+            out = out + findOneChar()
+            i = i + 1
+        else if ch = " " then
+            out = out + "\s+"
+            i = i + 1
+        else if c >= 97 and c <= 122 then
+            done = false
+            for each mt in tbl.multi
+                l = Len(mt[0])
+                if Mid(q, i, l) = mt[0] then
+                    seq = ""
+                    for j = 1 to l
+                        seq = seq + findLatinOne(Mid(mt[0], j, 1))
+                    end for
+                    out = out + "(?:" + findCyrAlt(mt[1]) + "|" + seq + ")" + soft
+                    i = i + l
+                    done = true
+                    exit for
+                end if
+            end for
+            if not done then
+                out = out + findLatinOne(ch) + soft
+                i = i + 1
+            end if
+        else if c < 128 then
+            if special.Instr(ch) >= 0 then out = out + "\" + ch else out = out + ch
+            i = i + 1
+        else
+            out = out + findCyrAlt(ch)
+            i = i + 1
+        end if
+    end while
+    return CreateObject("roRegex", out, "")
+end function

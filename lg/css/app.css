@@ -557,3 +557,14 @@ body.has-video #settings { background: rgba(20,28,46,.96); }
 
 /* 1.3.6: бегущая строка */
 .mq-in { display: inline-block; white-space: nowrap; }
+
+/* 1.4.0: строка результата поиска передач — третья строка с датой, цвет по времени */
+.c-find { display: none; font-size: 20px; line-height: 1.25; margin-top: 4px; }
+.c-row.find .c-find { display: block; }
+.c-row.find .c-bar { display: none; }
+.c-find.past { color: #8FA3C8; }
+.c-find.now { color: var(--amber); }
+.c-find.future { color: #8FD694; }
+.vrow.focus .c-find.past { color: #3A4668; }
+.vrow.focus .c-find.now { color: #7A4A00; }
+.vrow.focus .c-find.future { color: #1F6B2A; }

@@ -17,6 +17,7 @@
     <script type="text/brightscript" uri="MainPlayback.brs" />
     <script type="text/brightscript" uri="MainEpg.brs" />
     <script type="text/brightscript" uri="MainGuide.brs" />
+    <script type="text/brightscript" uri="MainFind.brs" />
     <script type="text/brightscript" uri="pkg:/source/catchup.brs" />
     <script type="text/brightscript" uri="pkg:/source/config.brs" />
     <script type="text/brightscript" uri="pkg:/source/log.brs" />
@@ -116,6 +117,7 @@
         <Group id="keyCatcher" focusable="true" />
 
         <Timer id="catTimer" duration="0.25" repeat="false" />
+        <Timer id="centerTimer" duration="0.08" repeat="false" />
         <Timer id="osdTimer" duration="4" repeat="false" />
         <Timer id="launchTimer" duration="10" repeat="false" />
         <Timer id="spinTimer" duration="0.7" repeat="false" />

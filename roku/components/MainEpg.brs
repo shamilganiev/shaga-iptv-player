@@ -114,6 +114,7 @@ end function
 ' Обновить передачу в строках около фокуса (весь список бывает в тысячи строк)
 sub refreshRows(radius as integer)
     if m.view <> "channels" or m.chanList.content = invalid then return
+    if m.findShown then return     ' search results keep their own second line / у результатов поиска своя вторая строка
     n = m.chanList.content.getChildCount()
     if n = 0 or n <> m.curIdx.Count() then return
     f = m.chanList.itemFocused

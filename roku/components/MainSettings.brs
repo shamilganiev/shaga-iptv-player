@@ -81,6 +81,7 @@ function settingsRow(title as string, value as string) as object
 end function
 
 sub buildSettingsRows(focusRow as integer)
+    setFindLayout(false)
     items = []
     m.settingsRows = []
     if m.settingsPage = "playlist" then

@@ -25,6 +25,11 @@
         <!-- 1.3.4: полное описание: запрос { key, s } -> ответ { key, s, d, src, why } -->
         <field id="descReq" type="assocarray" alwaysNotify="true" />
         <field id="descAns" type="assocarray" />
+        <!-- 1.4.0: programme search: { kind: "title"|"desc", q, keys: { channelKey: true } }
+             -> { q, kind, total, items: [ { key, s, e, t, d } ] } -->
+        <!-- 1.4.0: поиск передач по названию или началу описания -->
+        <field id="findReq" type="assocarray" alwaysNotify="true" />
+        <field id="findAns" type="assocarray" />
     </interface>
     <script type="text/brightscript" uri="EpgService.brs" />
     <script type="text/brightscript" uri="EpgParse.brs" />

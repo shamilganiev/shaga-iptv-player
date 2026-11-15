@@ -20,6 +20,9 @@ sub init()
     m.progScroll = m.top.findNode("progScroll")
     m.progBg = m.top.findNode("progBg")
     m.progBar = m.top.findNode("progBar")
+    m.findLabel = m.top.findNode("findLine")
+    m.isFind = false
+    m.findCat = 0
     m.isDark = false
     m.watched = invalid
 end sub
@@ -40,6 +43,20 @@ sub onContent()
     m.titleLabel.text = c.title
     m.logo.uri = c.HDPosterUrl
     m.logo.visible = (c.HDPosterUrl <> "")
+    ' 1.4.0: search result row (taller): channel, programme, date line; no progress bar
+    ' 1.4.0: строка результата поиска (выше): канал, передача, строка даты; без полоски
+    m.isFind = (c.hasField("findLine") and c.findLine <> "")
+    m.findLabel.visible = m.isFind
+    if m.isFind then
+        m.findLabel.text = c.findLine
+        m.findCat = c.findCat
+        m.numLabel.height = 124
+        m.logo.translation = [98, 44]
+    else
+        m.numLabel.height = 84
+        m.logo.translation = [98, 24]
+    end if
+    paintFind()
     onProgramme()
 end sub
 
@@ -53,6 +70,11 @@ sub onProgramme()
     if c.hasField("epgS") then
         s = c.epgS
         e = c.epgE
+    end if
+    if m.isFind then
+        m.progBg.visible = false
+        m.progBar.visible = false
+        return
     end if
     if e > s and s > 0 then
         now = CreateObject("roDateTime").AsSeconds()
@@ -73,6 +95,7 @@ sub onFocus()
     dark = (m.top.listHasFocus = true and m.top.focusPercent > 0.5)
     if dark = m.isDark then return
     m.isDark = dark
+    paintFind()
     ' Focused row: scrolling programme line instead of the cut one / Выделенная строка: бегущая строка вместо обрезанной
     m.progScroll.visible = dark
     m.progLabel.visible = not dark
@@ -88,4 +111,18 @@ sub onFocus()
         m.progBg.color = "0x5A5470FF"
         m.progBar.color = "0xF5B83DFF"
     end if
+end sub
+
+' Date line colour: past grey-blue, on air amber, future green (darker on the focus bar)
+' Цвет строки даты: прошедшие серо-голубой, в эфире янтарный, будущие зелёный (на рамке фокуса темнее)
+sub paintFind()
+    if not m.isFind then return
+    if m.isDark then
+        cols = ["0x3A4668FF", "0x7A4A00FF", "0x1F6B2AFF"]
+    else
+        cols = ["0x8FA3C8FF", "0xF5B83DFF", "0x8FD694FF"]
+    end if
+    c = m.findCat
+    if c < 0 or c > 2 then c = 0
+    m.findLabel.color = cols[c]
 end sub

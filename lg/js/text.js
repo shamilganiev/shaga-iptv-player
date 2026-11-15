@@ -104,5 +104,60 @@ var Text = {
     if (!n) return false;
     for (var i = 0; i < this.ADULT.length; i++) if (n.indexOf(this.ADULT[i]) >= 0) return true;
     return false;
+  },
+
+  // ---------- 1.4.0: шаблон поиска с масками (как buildFindRegex в Roku) ----------
+  // * — любое число любых символов (и ноль), ? — ровно один символ; * в начале и в конце
+  // подразумевается всегда; регистр не важен, е = ё; латиница находит и кириллицу (транслит):
+  // «garri*potter» находит «Гарри Поттер и философский камень».
+  FIND_MULTI: [['shch', 'щ'], ['sch', 'щ'], ['sh', 'ш'], ['ch', 'ч'], ['zh', 'ж'], ['kh', 'х'], ['ts', 'ц'],
+               ['yu', 'ю'], ['ya', 'я'], ['yo', 'е'], ['ye', 'е'], ['ju', 'ю'], ['ja', 'я']],
+  FIND_ONE: { a: ['а'], b: ['б'], v: ['в'], w: ['в'], g: ['г'], d: ['д'], e: ['е', 'э'], z: ['з'],
+              i: ['и', 'й', 'ы', 'і'], y: ['й', 'ы', 'и'], j: ['й', 'ж'], k: ['к'], l: ['л'], m: ['м'],
+              n: ['н'], o: ['о'], p: ['п'], r: ['р'], s: ['с'], t: ['т'], u: ['у'], f: ['ф'],
+              h: ['х', 'г'], c: ['ц', 'к', 'с'], x: ['кс', 'х'], q: ['к'] },
+
+  findCyrAlt: function (ch) {
+    if (ch === 'е') return '(?:е|Е|ё|Ё)';
+    var u = ch.toUpperCase();
+    return u === ch ? ch : '(?:' + ch + '|' + u + ')';
+  },
+
+  findLatinOne: function (ch) {
+    var self = this, alts = this.FIND_ONE[ch] || [];
+    return '(?:[' + ch + ch.toUpperCase() + ']' + alts.map(function (a) {
+      return '|' + a.split('').map(function (c) { return self.findCyrAlt(c); }).join('');
+    }).join('') + ')';
+  },
+
+  // Возвращает RegExp или null (пустой запрос)
+  findRegex: function (query) {
+    var self = this, q = this.norm(query).replace(/^\*+/, '').replace(/\*+$/, '').trim();
+    if (!q) return null;
+    var soft = '(?:ь|Ь|ъ|Ъ)?', out = '', i = 0;
+    while (i < q.length) {
+      var ch = q.charAt(i);
+      if (ch === '*') { out += '[\\s\\S]*'; i++; }
+      else if (ch === '?') { out += '[\\s\\S]'; i++; }
+      else if (ch === ' ') { out += '\\s+'; i++; }
+      else if (ch >= 'a' && ch <= 'z') {
+        var done = false;
+        for (var k = 0; k < this.FIND_MULTI.length; k++) {
+          var mt = this.FIND_MULTI[k];
+          if (q.substr(i, mt[0].length) === mt[0]) {
+            out += '(?:' + this.findCyrAlt(mt[1]) + '|' +
+              mt[0].split('').map(function (c) { return self.findLatinOne(c); }).join('') + ')' + soft;
+            i += mt[0].length;
+            done = true;
+            break;
+          }
+        }
+        if (!done) { out += this.findLatinOne(ch) + soft; i++; }
+      }
+      else if (ch.charCodeAt(0) < 128) { out += ch.replace(/[\\.^$|()\[\]{}+\-\/]/, '\\$&'); i++; }
+      else { out += this.findCyrAlt(ch); i++; }
+    }
+    return new RegExp(out);
   }
 };
+

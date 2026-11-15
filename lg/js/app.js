@@ -21,7 +21,7 @@ function isInput(el) {
 }
 
 var App = {
-  version: '1.3.7',
+  version: '1.4.0',
   PRIVACY_URL: 'https://shamilganiev.github.io/shaga-iptv-player/privacy.html',
   SUPPORT_URL: 'https://github.com/shamilganiev/shaga-iptv-player/issues',
   MAX_FAV: 200,
@@ -34,7 +34,8 @@ var App = {
   plId: null,        // плейлист, который сейчас показан
   plStale: false,    // показана сохранённая копия, обновить не удалось
   loadErr: '',       // при запуске нет ни кэша, ни сети — текст ошибки в колонке каналов
-  search: null,      // { q, list } — результаты поиска
+  search: null,      // { q, list } — результаты поиска каналов
+  find: null,        // { q, kind, total, chans[], progs[] } — результаты поиска передач (1.4.0)
   screens: {},
   screen: null,
   prev: null,
@@ -300,27 +301,70 @@ var App = {
   },
 
   // ---------- Поиск (как в Roku: латиница находит кириллицу, акценты не важны) ----------
-  openSearch: function () {
+  // kind: chan — каналы, title — передачи по названию, desc — по началу описания (1.4.0)
+  openSearch: function (kind) {
     var self = this;
+    kind = kind || 'chan';
     Prompt.open({
-      title: t('searchTitle'), msg: t('searchMsg'), value: this.search ? this.search.q : '',
+      title: t(kind === 'chan' ? 'findChan' : kind === 'title' ? 'findTitle' : 'findDesc'), msg: t('findMaskHint'),
+      value: kind === 'chan' ? (this.search ? this.search.q : '') : (this.find ? this.find.q : ''),
       onSubmit: function (q, prompt) {
         q = String(q).trim();
         if (!q) { prompt.close(); return; }
         prompt.close();
-        self.runSearch(q);
+        if (kind === 'chan') self.runSearch(q); else self.runFind(kind, q);
       }
     });
   },
 
-  runSearch: function (q) {
-    var self = this, qn = Text.norm(q), qf = Text.fuzz(qn);
-    var res = this.channels.filter(function (ch) {
-      if (self.isRestricted(ch.group)) return false;          // скрытые и закрытые не ищутся
-      if (ch.k == null) ch.k = Text.searchKey(ch.name);
-      return Text.matches(ch.k, qn, qf);
+  // Можно ли искать канал: группа показана и без отметки 18+ (строго — ни в одном поиске)
+  searchable: function (ch) { return !this.isRestricted(ch.group) && !this.isAdultGroup(ch.group); },
+
+  // 1.4.0: поиск передач. До 300 результатов: остаются ближайшие к «сейчас», порядок —
+  // прошедшие (по времени), в эфире, будущие (по времени).
+  runFind: function (kind, q) {
+    var self = this, rx = Text.findRegex(q);
+    if (!rx) return;
+    if (EPG.state !== 'ready' && EPG.state !== 'loading') {
+      Confirm.open(t('findTitle'), [{ label: t('ok') }], null,
+        t(EPG.state === 'nourl' ? 'epgNoSource' : EPG.state === 'error' ? 'epgError' : 'epgLoading'));
+      return;
+    }
+    var t0 = Date.now(), now = Date.now(), seen = {}, found = [], total = 0;
+    this.channels.forEach(function (ch) {
+      if (!self.searchable(ch)) return;
+      var key = EPG.key(ch);
+      if (seen[key]) return;
+      seen[key] = 1;
+      EPG.all(ch).forEach(function (p) {
+        var txt = kind === 'desc' ? p.d : p.t;
+        if (!txt || !rx.test(txt)) return;
+        total++;
+        if (found.length >= 5000) return;
+        var cat = p.e <= now ? 0 : p.s <= now ? 1 : 2;
+        found.push({ ch: ch, p: p, cat: cat, dist: cat === 1 ? 0 : Math.abs(p.s - now) });
+      });
     });
-    Log.info('Поиск «' + qn + '» / «' + qf + '» → ' + res.length);
+    if (found.length > 300) { found.sort(function (a, b) { return a.dist - b.dist; }); found = found.slice(0, 300); }
+    found.sort(function (a, b) { return a.cat - b.cat || a.p.s - b.p.s; });
+    Log.info('Поиск ' + kind + ' «' + Text.norm(q) + '»: найдено ' + total + ' за ' + (Date.now() - t0) + ' мс');
+    if (!found.length) {
+      Confirm.open(t('findTitle'), [{ label: t('ok') }], null,
+        t('noResults', { q: q }) + (EPG.state === 'loading' ? ' ' + t('epgLoading') : ''));
+      return;
+    }
+    this.find = { q: q, kind: kind, total: total,
+                  chans: found.map(function (f) { return f.ch; }), progs: found.map(function (f) { return f.p; }) };
+    if (this.screen !== Browser) this.show('browser');
+    Browser.showFind();
+  },
+
+  runSearch: function (q) {
+    // 1.4.0: маски * и ?, транслит; скрытые, закрытые и группы 18+ не ищутся
+    var self = this, rx = Text.findRegex(q);
+    if (!rx) return;
+    var res = this.channels.filter(function (ch) { return self.searchable(ch) && rx.test(ch.name); });
+    Log.info('Поиск каналов «' + Text.norm(q) + '» → ' + res.length);
     if (!res.length) {
       Confirm.open(t('searchTitle'), [{ label: t('ok') }], null, t('noResults', { q: q }));
       return;
@@ -363,16 +407,14 @@ var App = {
     this.groupOrder = order;
     this.groupMap = map;
     this.byNum = byNum;
+    this.find = null;          // результаты поиска передач привязаны к старому списку каналов
     if (this.search) {
       // результаты поиска пересчитываются на новом списке
       var q = this.search.q;
       this.search = null;
       if (this.channels.length) {
-        var self = this, qn = Text.norm(q), qf = Text.fuzz(qn);
-        var list = this.channels.filter(function (ch) {
-          if (ch.k == null) ch.k = Text.searchKey(ch.name);
-          return Text.matches(ch.k, qn, qf);
-        });
+        var self = this, rx = Text.findRegex(q);
+        var list = rx ? this.channels.filter(function (ch) { return self.searchable(ch) && rx.test(ch.name); }) : [];
         if (list.length) this.search = { q: q, list: list };
       }
     }
@@ -419,6 +461,7 @@ var App = {
     if (gid === '__fav') {
       return this.channels.filter(function (c) { return self.favSet[c.name] && !self.isRestricted(c.group); });
     }
+    if (gid === '__find') return this.find ? this.find.chans : [];
     if (gid === '__search') {
       return this.search ? this.search.list.filter(function (c) { return !self.isRestricted(c.group); }) : [];
     }

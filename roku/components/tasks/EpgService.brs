@@ -28,6 +28,7 @@ sub epgLoop()
     m.top.observeField("detailKey", m.port)
     m.top.observeField("listKey", m.port)
     m.top.observeField("descReq", m.port)
+    m.top.observeField("findReq", m.port)
     m.rangesOk = false      ' the server gives byte ranges / сервер отдаёт куски файла
     m.chanPos = {}          ' order of channels in the file / порядок каналов в файле
     m.fileSize = 0
@@ -82,6 +83,8 @@ sub handleEvent(msg as object)
         answerList(msg.getData())
     else if f = "descReq" then
         answerDesc(msg.getData())
+    else if f = "findReq" then
+        answerFind(msg.getData())
     end if
 end sub
 
@@ -866,3 +869,68 @@ function rangeGet(a as integer, b as integer) as object
     end if
     return res
 end function
+
+' ---------- programme search (1.4.0) / поиск передач ----------
+' Titles (or the short descriptions) of the allowed channels are checked with the regex from
+' buildFindRegex. Up to 300 results: the nearest to "now" are kept, then sorted:
+' past (by time), on air, future (by time).
+' Названия (или короткие описания) разрешённых каналов проверяются шаблоном из buildFindRegex.
+' До 300 результатов: остаются ближайшие к «сейчас», затем порядок: прошедшие (по времени),
+' в эфире, будущие (по времени).
+sub answerFind(q as dynamic)
+    if q = invalid or q.q = invalid then return
+    t0 = CreateObject("roTimespan")
+    ans = { q: q.q, kind: q.kind, total: 0, items: [] }
+    rx = buildFindRegex(q.q)
+    if rx = invalid or q.keys = invalid then
+        m.top.findAns = ans
+        return
+    end if
+    now = CreateObject("roDateTime").AsSeconds()
+    seen = {}
+    found = []
+    total = 0
+    checked = 0
+    for each key in q.keys
+        fid = m.keyToFile[key]
+        if fid <> invalid and not seen.DoesExist(fid) then
+            seen[fid] = true
+            pr = m.progs[fid]
+            if pr <> invalid then
+                arr = pr.t
+                if q.kind = "desc" then arr = pr.d
+                for i = 0 to arr.Count() - 1
+                    checked = checked + 1
+                    if arr[i] <> "" and rx.IsMatch(arr[i]) then
+                        total = total + 1
+                        if found.Count() < 5000 then
+                            cat = 2
+                            if pr.e[i] <= now then
+                                cat = 0
+                            else if pr.s[i] <= now then
+                                cat = 1
+                            end if
+                            dist = pr.s[i] - now
+                            if dist < 0 then dist = -dist
+                            if cat = 1 then dist = 0
+                            found.push({ key: key, s: pr.s[i], e: pr.e[i], t: pr.t[i], d: pr.d[i], cat: cat, dist: dist, ord: cat * 1000000 + (pr.s[i] - now + 400000) })
+                        end if
+                    end if
+                end for
+            end if
+        end if
+    end for
+    if found.Count() > 300 then
+        found.SortBy("dist")
+        keep = []
+        for i = 0 to 299
+            keep.push(found[i])
+        end for
+        found = keep
+    end if
+    found.SortBy("ord")
+    ans.total = total
+    ans.items = found
+    dbg("EPG", "search " + q.kind + ": " + total.ToStr() + " found of " + checked.ToStr() + " in " + t0.TotalMilliseconds().ToStr() + " ms")
+    m.top.findAns = ans
+end sub

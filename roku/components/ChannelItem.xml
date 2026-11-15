@@ -28,6 +28,9 @@
         <ScrollingLabel id="progScroll" translation="[160,44]" maxWidth="444" height="28" font="font:SmallestSystemFont" color="0x2C2450FF" visible="false" />
         <!-- 1.3.6: amber fill on a grey track, so the bar does not merge with the focus bar -->
         <!-- 1.3.6: янтарная заливка на сером фоне — полоска не сливается с подсветкой выделения -->
+ <!-- 1.4.0: third line of a search result: "Yesterday: 11/14/2026 at 13:45", coloured by time -->
+        <!-- 1.4.0: третья строка результата поиска: «Вчера: 11/14/2026 в 13:45», цвет по времени -->
+        <Label id="findLine" translation="[160,80]" width="444" height="30" font="font:SmallestSystemFont" color="0x8FA3C8FF" visible="false" />
         <Rectangle id="progBg" translation="[160,74]" width="300" height="4" color="0x5A5470FF" visible="false" />
         <Rectangle id="progBar" translation="[160,74]" width="0" height="4" color="0xF5B83DFF" visible="false" />
     </children>
