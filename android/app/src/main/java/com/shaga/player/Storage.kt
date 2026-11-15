@@ -1,7 +1,7 @@
 // ShaGa IPTV Player for Android — Storage.kt
 // Saved settings: one JSON file, the same scheme as the Roku registry and LG storage.
 // Сохранённые настройки: один JSON-файл, схема та же, что в реестре Roku и хранилище LG.
-//   { v, lastOkId, nextId, playlists[{id, name, url}], zapInvert }
+//   { v, lang, lastOkId, nextId, playlists[{id, name, url}], zapInvert, favorites[] }
 // 0.1.0 keeps one playlist; up to 5 come with the "Playlists" window.
 // В 0.1.0 хранится один плейлист; до 5 — вместе с окном «Плейлисты».
 package com.shaga.player
@@ -27,8 +27,15 @@ object Storage {
     // (по умолчанию); false = классическое. Имя то же, что в LG-версии.
     var zapInvert = true
 
+    // Interface language: "" = automatic (system language) / Язык интерфейса: "" = автоматически
+    var lang = ""
+
+    // Favourites: channel names (access keys in links may change), common for all playlists.
+    // Избранное: названия каналов (ключи в ссылках могут смениться), общее для всех плейлистов.
+    val favorites = ArrayList<String>()
+
     fun load(ctx: Context) {
-        playlists.clear(); lastOkId = 0; nextId = 1; zapInvert = true
+        playlists.clear(); lastOkId = 0; nextId = 1; zapInvert = true; lang = ""; favorites.clear()
         try {
             val f = File(ctx.filesDir, FILE)
             if (!f.exists()) return
@@ -36,6 +43,12 @@ object Storage {
             lastOkId = o.optInt("lastOkId", 0)
             nextId = o.optInt("nextId", 1)
             zapInvert = o.optBoolean("zapInvert", true)
+            lang = o.optString("lang", "")
+            val fav = o.optJSONArray("favorites") ?: JSONArray()
+            for (i in 0 until fav.length()) {
+                val name = fav.optString(i, "")
+                if (name.isNotEmpty() && favorites.size < Config.MAX_FAVORITES) favorites.add(name)
+            }
             val arr = o.optJSONArray("playlists") ?: JSONArray()
             for (i in 0 until arr.length()) {
                 val p = arr.getJSONObject(i)
@@ -51,7 +64,9 @@ object Storage {
         try {
             val arr = JSONArray()
             for (p in playlists) arr.put(JSONObject().put("id", p.id).put("name", p.name).put("url", p.url))
-            val o = JSONObject().put("v", VERSION).put("lastOkId", lastOkId).put("nextId", nextId).put("playlists", arr)
+            val fav = JSONArray()
+            for (name in favorites) fav.put(name)
+            val o = JSONObject().put("v", VERSION).put("lang", lang).put("favorites", fav).put("lastOkId", lastOkId).put("nextId", nextId).put("playlists", arr)
                 .put("zapInvert", zapInvert)
             // Write to a temporary file first, so that a failure cannot spoil the settings.
             // Сначала пишем во временный файл, чтобы сбой не испортил настройки.

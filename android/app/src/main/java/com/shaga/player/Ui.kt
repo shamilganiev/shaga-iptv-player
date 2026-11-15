@@ -10,6 +10,7 @@ package com.shaga.player
 import android.view.ViewGroup
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -35,10 +36,12 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -81,6 +84,8 @@ class UiState {
     var playlistName by mutableStateOf("")
     var listError by mutableStateOf("")
     var playState by mutableStateOf(PlayState.IDLE)
+    var lang by mutableStateOf("en")        // a new language redraws everything / новый язык перерисовывает всё
+    var numBuf by mutableStateOf("")        // channel number being typed / набираемый номер канала
     var isTv = false
 }
 
@@ -92,12 +97,30 @@ fun AppRoot(ui: UiState, nav: Nav, exo: Player, onWelcome: () -> Unit) {
         val wide = maxWidth >= 840.dp
         val portrait = maxHeight > maxWidth
         val screenWidth = maxWidth
-        when (ui.screen) {
-            Screen.WELCOME -> WelcomeScreen(ui.isTv, onWelcome)
-            Screen.LOADING -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Label(S.t("loading"), color = Ui.Muted, size = 20)
+        // key(language): after a language change the whole screen is built again, so that
+        // every text is taken in the new language.
+        // key(язык): после смены языка экран строится заново, чтобы все тексты взялись
+        // на новом языке.
+        key(ui.lang) {
+            when (ui.screen) {
+                Screen.WELCOME -> WelcomeScreen(ui.isTv, onWelcome)
+                Screen.LOADING -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Label(S.t("loading"), color = Ui.Muted, size = 20)
+                }
+                Screen.MAIN -> MainScreen(ui, nav, exo, wide, portrait, screenWidth)
             }
-            Screen.MAIN -> MainScreen(ui, nav, exo, wide, portrait, screenWidth)
+        }
+        // Channel number typed with digits / Номер канала, набираемый цифрами
+        val num = ui.numBuf
+        if (num.isNotEmpty()) {
+            Label(
+                num + if (num.length < 4) "_" else "",
+                modifier = Modifier.align(Alignment.TopEnd).safeDrawingPadding()
+                    .padding(top = 27.dp, end = 48.dp)
+                    .background(Ui.Shade, RoundedCornerShape(10.dp))
+                    .padding(horizontal = 22.dp, vertical = 10.dp),
+                color = Ui.Amber, size = 34, bold = true, maxLines = 1
+            )
         }
     }
 }
@@ -139,12 +162,17 @@ private fun Modifier.screenEdges(isTv: Boolean): Modifier =
 // A row of a list: fixed height, background by state, reacts to a tap.
 // Строка списка: постоянная высота, фон по состоянию, реагирует на нажатие пальцем.
 @Composable
-private fun ListRow(index: Int, height: Dp, background: Color, onTap: (Int) -> Unit, content: @Composable () -> Unit) {
+private fun ListRow(
+    index: Int, height: Dp, background: Color,
+    onTap: (Int) -> Unit, onHold: (Int) -> Unit,
+    content: @Composable () -> Unit
+) {
     val tap by rememberUpdatedState(onTap)
+    val hold by rememberUpdatedState(onHold)
     Box(
         Modifier.fillMaxWidth().height(height)
             .background(background, RoundedCornerShape(8.dp))
-            .pointerInput(index) { detectTapGestures(onTap = { tap(index) }) }
+            .pointerInput(index) { detectTapGestures(onTap = { tap(index) }, onLongPress = { hold(index) }) }
             .padding(horizontal = 12.dp),
         contentAlignment = Alignment.CenterStart
     ) {
@@ -158,6 +186,14 @@ private fun ListRow(index: Int, height: Dp, background: Color, onTap: (Int) -> U
 // Высота строк постоянная, поэтому страница считается без измерения каждой строки.
 @Composable
 private fun KeepVisible(listState: LazyListState, sel: Int, rowPx: Int, key: Any?, onPerPage: (Int) -> Unit) {
+    val perPageOut by rememberUpdatedState(onPerPage)
+    // The page size is known as soon as the list is measured (and after a rotation).
+    // Размер страницы известен, как только список измерен (и после поворота экрана).
+    LaunchedEffect(listState, rowPx) {
+        snapshotFlow { listState.layoutInfo.viewportSize.height }.collect { h ->
+            if (h > 0 && rowPx > 0) perPageOut(maxOf(1, h / rowPx))
+        }
+    }
     LaunchedEffect(sel, key) {
         val viewport = listState.layoutInfo.viewportSize.height
         if (viewport <= 0 || rowPx <= 0) return@LaunchedEffect      // not measured yet / ещё не измерен
@@ -244,6 +280,7 @@ private fun MainScreen(
     val videoHeight = screenWidth * 9f / 16f
     val shown = nav.shown
     val channels = shown?.channels ?: emptyList()
+    val emptyText = if (shown?.id == Catalog.FAV) S.t("emptyFav") else ""
 
     Box(Modifier.fillMaxSize()) {
         if (playing != null) {
@@ -251,7 +288,9 @@ private fun MainScreen(
                 exo = exo,
                 modifier = if (topVideo) Modifier.statusBarsPadding().fillMaxWidth().height(videoHeight)
                 else Modifier.fillMaxSize(),
-                onTap = { nav.tapVideo() }
+                swipes = full,
+                onTap = { nav.tapVideo() },
+                onSwipe = { nav.swipe(it) }
             )
         }
 
@@ -282,8 +321,9 @@ private fun MainScreen(
                         ChannelsColumn(
                             Modifier.weight(0.40f).fillMaxHeight(), channels, nav.chanSel,
                             cursor = nav.keyMode && nav.column == Pane.CHANNELS, playing = playing,
-                            backTitle = "", onBack = { nav.back() },
-                            onTap = { nav.tapChannel(it) }, onPerPage = { nav.channelsPerPage = it }
+                            backTitle = "", onBack = { nav.back() }, emptyText = emptyText,
+                            onTap = { nav.tapChannel(it) }, onHold = { nav.holdChannel(it) },
+                            onPerPage = { nav.channelsPerPage = it }
                         )
                         Spacer(Modifier.width(10.dp))
                         InfoColumn(
@@ -302,8 +342,9 @@ private fun MainScreen(
                     ChannelsColumn(
                         Modifier.fillMaxWidth().weight(1f), channels, nav.chanSel,
                         cursor = nav.keyMode, playing = playing,
-                        backTitle = shown?.title ?: "", onBack = { nav.back() },
-                        onTap = { nav.tapChannel(it) }, onPerPage = { nav.channelsPerPage = it }
+                        backTitle = shown?.title ?: "", onBack = { nav.back() }, emptyText = emptyText,
+                        onTap = { nav.tapChannel(it) }, onHold = { nav.holdChannel(it) },
+                        onPerPage = { nav.channelsPerPage = it }
                     )
                 }
             }
@@ -352,7 +393,7 @@ private fun GroupsColumn(
                 ListRow(
                     index = i, height = Config.ROW_GROUP_DP.dp,
                     background = if (onCursor) Ui.Amber else if (marked) Ui.Mark else Color.Transparent,
-                    onTap = onTap
+                    onTap = onTap, onHold = {}
                 ) {
                     Label(rowText(row), color = if (onCursor) Ui.Ink else Ui.Text, size = 18, maxLines = 1)
                 }
@@ -364,8 +405,8 @@ private fun GroupsColumn(
 @Composable
 private fun ChannelsColumn(
     modifier: Modifier, channels: List<Channel>, sel: Int, cursor: Boolean, playing: Channel?,
-    backTitle: String, onBack: () -> Unit,
-    onTap: (Int) -> Unit, onPerPage: (Int) -> Unit
+    backTitle: String, onBack: () -> Unit, emptyText: String,
+    onTap: (Int) -> Unit, onHold: (Int) -> Unit, onPerPage: (Int) -> Unit
 ) {
     val listState = remember(channels) { LazyListState(maxOf(0, sel - 2)) }
     val rowPx = with(LocalDensity.current) { Config.ROW_CHANNEL_DP.dp.roundToPx() }
@@ -386,6 +427,9 @@ private fun ChannelsColumn(
             // Above the channels: the highlighted channel / Над каналами: выделенный канал
             ColumnHeader(channels.getOrNull(sel)?.name ?: "")
         }
+        if (channels.isEmpty() && emptyText.isNotEmpty()) {
+            Label(emptyText, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), color = Ui.Muted, size = 16)
+        }
         LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().weight(1f)) {
             itemsIndexed(channels) { i, ch ->
                 val onCursor = cursor && i == sel
@@ -393,7 +437,7 @@ private fun ChannelsColumn(
                 ListRow(
                     index = i, height = Config.ROW_CHANNEL_DP.dp,
                     background = if (onCursor) Ui.Amber else if (i == sel) Ui.Mark else Color.Transparent,
-                    onTap = onTap
+                    onTap = onTap, onHold = onHold
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         // Number: a column for 4 digits, aligned right / Номер: колонка под 4 цифры, вправо
@@ -443,8 +487,10 @@ private fun InfoColumn(modifier: Modifier, channel: Channel?, isPlaying: Boolean
 // ---------- video / видео ----------
 
 @Composable
-private fun VideoLayer(exo: Player, modifier: Modifier, onTap: () -> Unit) {
+private fun VideoLayer(exo: Player, modifier: Modifier, swipes: Boolean, onTap: () -> Unit, onSwipe: (Int) -> Unit) {
     val tap by rememberUpdatedState(onTap)
+    val swipe by rememberUpdatedState(onSwipe)
+    val minSwipePx = with(LocalDensity.current) { Config.SWIPE_DP.dp.toPx() }
     Box(modifier.background(Color.Black)) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
@@ -460,8 +506,26 @@ private fun VideoLayer(exo: Player, modifier: Modifier, onTap: () -> Unit) {
             },
             onRelease = { view -> view.player = null }
         )
-        // Transparent layer over the video for taps / Прозрачный слой поверх видео для нажатий
-        Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures(onTap = { tap() }) })
+        // Transparent layer over the video for taps and, in full screen, vertical swipes:
+        // a swipe up = the next channel of the list, a swipe down = the previous one.
+        // Прозрачный слой поверх видео для нажатий и, на полном экране, вертикальных жестов:
+        // жест вверх = следующий канал списка, жест вниз = предыдущий.
+        Box(
+            Modifier.fillMaxSize()
+                .pointerInput(Unit) { detectTapGestures(onTap = { tap() }) }
+                .pointerInput(swipes) {
+                    if (swipes) {
+                        var total = 0f
+                        detectVerticalDragGestures(
+                            onDragStart = { total = 0f },
+                            onDragEnd = {
+                                if (total <= -minSwipePx) swipe(1) else if (total >= minSwipePx) swipe(-1)
+                            },
+                            onVerticalDrag = { _, dragAmount -> total += dragAmount }
+                        )
+                    }
+                }
+        )
     }
 }
 

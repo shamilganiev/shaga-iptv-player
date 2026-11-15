@@ -39,7 +39,31 @@ object S {
             "exitTitle" to "Close ShaGa IPTV Player?",
             "exit" to "Close",
             "back" to "Back",
-            "hintKeyboard" to "Tip: it is easier to type the link on a phone. Open the remote and its keyboard in the Google TV app."
+            "hintKeyboard" to "Tip: it is easier to type the link on a phone. Open the remote and its keyboard in the Google TV app.",
+            "svcSearch" to "Search",
+            "svcLanguage" to "Language",
+            "searchTitle" to "Search channels",
+            "searchMsg" to "Type part of the channel name. Latin letters also find Cyrillic names.",
+            "searchPrefix" to "Search:",
+            "noResults" to "Nothing found for “{q}”",
+            "favorites" to "Favorites",
+            "favAdded" to "Added to favorites: {name}",
+            "favRemoved" to "Removed from favorites: {name}",
+            "favLimit" to "Favorites are full: up to {n} channels.",
+            "noChannel" to "There is no channel {n}",
+            "langTitle" to "Interface language",
+            "langAuto" to "Automatic (system language)",
+            "settings" to "Settings",
+            "aboutRow" to "About",
+            "privacyLabel" to "Privacy policy:",
+            "supportLabel" to "Support:",
+            "sClose" to "Close the app",
+            "ctxFavAdd" to "Add to Favorites",
+            "ctxFavRemove" to "Remove from Favorites",
+            "ctxGoGroup" to "Go to the channel’s group",
+            "aboutText" to "{v}. A free player for your own playlists. The app collects and sends no data: playlist links, settings and favorites are stored only on this device.",
+            "emptyFav" to "No favorites yet. Hold OK on a channel (or touch and hold it) to add it.",
+            "langName" to "English"
         ),
         "es" to mapOf(
             "welcomeTitle" to "Bienvenido a ShaGa IPTV Player",
@@ -73,7 +97,31 @@ object S {
             "exitTitle" to "¿Cerrar ShaGa IPTV Player?",
             "exit" to "Cerrar",
             "back" to "Atrás",
-            "hintKeyboard" to "Consejo: es más fácil escribir el enlace en el teléfono. Abre el mando y su teclado en la aplicación Google TV."
+            "hintKeyboard" to "Consejo: es más fácil escribir el enlace en el teléfono. Abre el mando y su teclado en la aplicación Google TV.",
+            "svcSearch" to "Buscar",
+            "svcLanguage" to "Idioma",
+            "searchTitle" to "Buscar canales",
+            "searchMsg" to "Escribe parte del nombre del canal. Las letras latinas también encuentran nombres en cirílico.",
+            "searchPrefix" to "Buscar:",
+            "noResults" to "No se encontró nada para «{q}»",
+            "favorites" to "Favoritos",
+            "favAdded" to "Añadido a favoritos: {name}",
+            "favRemoved" to "Quitado de favoritos: {name}",
+            "favLimit" to "Favoritos está lleno: hasta {n} canales.",
+            "noChannel" to "No existe el canal {n}",
+            "langTitle" to "Idioma de la interfaz",
+            "langAuto" to "Automático (idioma del sistema)",
+            "settings" to "Ajustes",
+            "aboutRow" to "Acerca de",
+            "privacyLabel" to "Política de privacidad:",
+            "supportLabel" to "Soporte:",
+            "sClose" to "Cerrar la aplicación",
+            "ctxFavAdd" to "Añadir a Favoritos",
+            "ctxFavRemove" to "Quitar de Favoritos",
+            "ctxGoGroup" to "Ir al grupo del canal",
+            "aboutText" to "{v}. Un reproductor gratuito para tus propias listas. La aplicación no recopila ni envía datos: los enlaces, los ajustes y los favoritos se guardan solo en este dispositivo.",
+            "emptyFav" to "Aún no hay favoritos. Mantén pulsado OK sobre un canal (o mantenlo pulsado con el dedo) para añadirlo.",
+            "langName" to "Español"
         ),
         "ru" to mapOf(
             "welcomeTitle" to "Добро пожаловать в ShaGa IPTV Player",
@@ -107,7 +155,31 @@ object S {
             "exitTitle" to "Закрыть ShaGa IPTV Player?",
             "exit" to "Закрыть",
             "back" to "Назад",
-            "hintKeyboard" to "Совет: ссылку удобнее вводить с телефона. В приложении Google TV откройте пульт и его клавиатуру."
+            "hintKeyboard" to "Совет: ссылку удобнее вводить с телефона. В приложении Google TV откройте пульт и его клавиатуру.",
+            "svcSearch" to "Поиск",
+            "svcLanguage" to "Язык",
+            "searchTitle" to "Поиск каналов",
+            "searchMsg" to "Введите часть названия канала. Латиница находит и названия на кириллице.",
+            "searchPrefix" to "Поиск:",
+            "noResults" to "Ничего не найдено по запросу «{q}»",
+            "favorites" to "Избранное",
+            "favAdded" to "Добавлен в избранное: {name}",
+            "favRemoved" to "Убран из избранного: {name}",
+            "favLimit" to "Избранное заполнено: не больше {n} каналов.",
+            "noChannel" to "Канала {n} нет",
+            "langTitle" to "Язык интерфейса",
+            "langAuto" to "Автоматически (язык системы)",
+            "settings" to "Настройки",
+            "aboutRow" to "О приложении",
+            "privacyLabel" to "Политика конфиденциальности:",
+            "supportLabel" to "Поддержка:",
+            "sClose" to "Закрыть приложение",
+            "ctxFavAdd" to "В избранное",
+            "ctxFavRemove" to "Убрать из избранного",
+            "ctxGoGroup" to "Перейти в группу канала",
+            "aboutText" to "{v}. Бесплатный плеер для ваших собственных плейлистов. Приложение не собирает и не передаёт данные: ссылки на плейлисты, настройки и избранное хранятся только на этом устройстве.",
+            "emptyFav" to "В избранном пока пусто. Удерживайте OK на канале (или долго нажмите на него), чтобы добавить.",
+            "langName" to "Русский"
         )
     )
 
@@ -117,9 +189,16 @@ object S {
     var lang = "en"
         private set
 
-    // System language when we have it, else English / Язык системы, если он у нас есть, иначе английский.
-    fun init(systemLang: String) {
-        lang = if (TABLES.containsKey(systemLang)) systemLang else "en"
+    // Languages of the interface, in the order of the menu / Языки интерфейса в порядке меню
+    val LANGS = listOf("en", "es", "ru")
+
+    fun nameOf(code: String): String = TABLES[code]?.get("langName") ?: code
+
+    // preference: "" = automatic (the system language when we have it, else English).
+    // preference: "" = автоматически (язык системы, если он у нас есть, иначе английский).
+    fun init(preference: String, systemLang: String) {
+        val want = if (preference.isEmpty()) systemLang else preference
+        lang = if (TABLES.containsKey(want)) want else "en"
         table = TABLES[lang] ?: EN
     }
 

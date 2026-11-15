@@ -5,6 +5,23 @@ package com.shaga.player
 object Config {
     const val APP_NAME = "ShaGa IPTV Player"
 
+    const val PRIVACY_URL = "https://shamilganiev.github.io/shaga-iptv-player/privacy.html"
+    const val SUPPORT_URL = "https://github.com/shamilganiev/shaga-iptv-player/issues"
+
+    // Favourites are kept by channel names, not more than / Избранное хранится по названиям, не больше
+    const val MAX_FAVORITES = 200
+
+    // OK held this long opens the context menu / OK, удержанный столько, открывает контекстное меню
+    const val LONG_PRESS_MS = 500L
+
+    // Channel number typed with digits: up to 4 digits, starts after this pause.
+    // Номер канала цифрами: до 4 цифр, включается после такой паузы.
+    const val NUMBER_COMMIT_MS = 1600L
+
+    // A swipe over the video shorter than this is not a channel switch, dp.
+    // Жест по видео короче этого — не переключение канала, dp.
+    const val SWIPE_DP = 70
+
     // Playlist download: whole timeout and size limit.
     // Загрузка плейлиста: общий тайм-аут и предел размера.
     const val LOAD_TIMEOUT_MS = 30_000
