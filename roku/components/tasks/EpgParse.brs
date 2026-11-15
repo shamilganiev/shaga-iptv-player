@@ -23,6 +23,7 @@ sub epgParseBegin(keys as object)
         winLo: now - 24 * 3600, winHi: now + 24 * 3600, descUntil: now + 4 * 3600, winCache: {}
         total: 0, kept: 0, dropChan: 0, dropWindow: 0, dropTime: 0, minDate: "", maxDate: ""
         byId: 0, byName: 0
+        chanPos: {}   ' file channel id -> byte of its first programme (file order) / порядок каналов в файле
         carryPos: 0, ba: CreateObject("roByteArray")   ' byte position of the carry / байтовая позиция хвоста
         rxChannel: CreateObject("roRegex", "<channel\s+id\s*=\s*[" + Chr(34) + "']([^" + Chr(34) + "']+)[" + Chr(34) + "'][^>]*>(.*?)</channel>", "s")
         rxName: CreateObject("roRegex", "<display-name[^>]*>([^<]*)</display-name>", "")
@@ -132,6 +133,7 @@ sub epgParseProgramme(piece as string, pieceByte as integer)
     head = piece.Mid(p, te - p)
     ep.total = ep.total + 1
     cid = epgAttr(head, "channel")
+    if not ep.chanPos.DoesExist(cid) then ep.chanPos[cid] = pieceByte + p
     if not ep.wanted.DoesExist(cid) then
         ep.dropChan = ep.dropChan + 1
         return

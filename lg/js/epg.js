@@ -61,6 +61,8 @@ var EPG = {
       self.byKey = c.byKey;
       self.stats = c.stats;
       self.ranges = c.ranges !== false;
+      self.chanPos = c.chanPos || {};
+      self.fileSize = c.size || 0;
       self.loadedAt = c.loadedAt;
       self.state = 'ready';
       Log.info('EPG: сохранённая копия за ' + (Date.now() - t0) + ' мс, ей ' + Math.round(age / 60000) + ' мин; каналов с программой ' +
@@ -112,6 +114,8 @@ var EPG = {
       if (seq !== self.seq) return;
       self.byKey = res.byKey;
       self.stats = res.stats;
+      self.chanPos = res.chanPos;
+      self.fileSize = res.size;
       self.state = 'ready';
       self.loading = false;
       self.loadedAt = Date.now();
@@ -137,7 +141,7 @@ var EPG = {
 
   saveCopy: function () {
     var t0 = Date.now(), url = this.url;
-    Cache.setKey('epg', { win: 24, url: url, loadedAt: this.loadedAt, byKey: this.byKey, stats: this.stats, ranges: this.ranges }).then(function () {
+    Cache.setKey('epg', { win: 24, url: url, loadedAt: this.loadedAt, byKey: this.byKey, stats: this.stats, ranges: this.ranges, chanPos: this.chanPos, size: this.fileSize }).then(function () {
       Log.info('EPG: копия сохранена за ' + (Date.now() - t0) + ' мс');
     });
   },
@@ -192,12 +196,16 @@ var EPG = {
     }
 
     // 1.3.4: байтовое место каждой передачи в файле — для полного описания по запросу
+    var chanPos = {}, cidStr = {};
     var enc8 = window.TextEncoder ? new TextEncoder() : null;
     var byteOk = !!enc8, bufByte = 0;
     function blen(x) { return enc8.encode(x).length; }
 
     function handleProg(attrs, body, at) {
       st.progs++;
+      // 1.3.7: порядок каналов в файле (место первой передачи канала) — для поиска сдвинувшейся передачи
+      var cid0 = attr(attrs, 'channel');
+      if (at >= 0 && chanPos[cid0] == null) { cidStr[cid0] = own(cid0); chanPos[cidStr[cid0]] = at; }
       var cid = attr(attrs, 'channel');
       var k = alias[cid] || wantId[cid];
       if (!k) {
@@ -218,7 +226,7 @@ var EPG = {
       // Короткое описание (200 символов) — для колонки; полное скачивается по запросу (1.3.4)
       var dm = /<desc[^>]*>([\s\S]*?)<\/desc>/.exec(body);
       if (dm) { var dd = decode(dm[1]); p.d = dd.length > 200 ? own(dd.slice(0, 197)) + '...' : dd; }
-      if (at >= 0) p.o = at;
+      if (at >= 0) { p.o = at; p.c = cidStr[cid] || (cidStr[cid] = own(cid)); }
       (byKey[k] || (byKey[k] = [])).push(p);
       st.kept++;
     }
@@ -333,7 +341,8 @@ var EPG = {
         Log.info('EPG: примеры id в файле: ' + sampleEpgIds.join(', ') + '; в плейлисте без программы: ' + miss.join(', ') +
           (sampleNoChan.length ? '; передачи для неизвестных id: ' + sampleNoChan.join(', ') : ''));
       }
-      return { byKey: byKey, stats: { channels: withEpg } };
+      var size = st.bytes;
+      return { byKey: byKey, stats: { channels: withEpg }, chanPos: byteOk ? chanPos : {}, size: byteOk ? size : 0 };
     }, function (err) {
       clearTimeout(timer);
       throw err;
@@ -392,40 +401,109 @@ var EPG = {
   // Просим у сервера ~16 КБ вокруг места передачи в файле (HTTP Range), проверяем, что это
   // та же передача (начало и название), берём весь <desc>. Иначе — короткий текст из памяти.
   // Ответ: { d, src: 'network'|'memory', why }
+  // 1.3.7: провайдер пересобирает файл каждые несколько часов, передачи сдвигаются. Если передачи
+  // нет на месте — ищем: в каждом куске видны передачи, чьи старые места известны (по ним берём
+  // сдвиг), и понятно, раньше цель или позже (порядок каналов в файле сохраняется, передачи идут
+  // по времени). До 10 запросов / 6 с.
   fullDesc: function (p) {
     var self = this, short = { d: p.d || '', src: 'memory', why: '' };
     if (!this.ranges) { short.why = 'сервер не отдаёт куски файла'; return Promise.resolve(short); }
     if (p.o == null) { short.why = 'нет места в файле'; return Promise.resolve(short); }
-    var a = Math.max(0, p.o - 2048), t0 = Date.now();
-    var ctrl = window.AbortController ? new AbortController() : null;
-    var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, 6000);
-    return fetch(this.url, { headers: { Range: 'bytes=' + a + '-' + (p.o + 16383) }, signal: ctrl ? ctrl.signal : undefined })
-      .then(function (res) {
-        if (res.status !== 206) {
-          if (ctrl) ctrl.abort();
-          if (res.status === 200) self.ranges = false;   // отдаёт весь файл — кусками не умеет
-          throw new Error('HTTP ' + res.status);
-        }
-        return res.text();
-      }).then(function (txt) {
-        clearTimeout(timer);
-        var re = /<programme\b([^>]*)>([\s\S]*?)<\/programme>/g, m;
-        while ((m = re.exec(txt))) {
-          var st = /\bstart\s*=\s*["']([^"']*)/.exec(m[1]);
-          var tm = /<title[^>]*>([\s\S]*?)<\/title>/.exec(m[2]);
-          if (st && parseTime(st[1]) === p.s && tm && decode(tm[1]) === p.t) {
-            var dm = /<desc[^>]*>([\s\S]*?)<\/desc>/.exec(m[2]);
-            Log.info('EPG: полное описание из файла за ' + (Date.now() - t0) + ' мс');
-            return { d: dm ? decode(dm[1]) : '', src: 'network', why: '' };
+    var t0 = Date.now(), tries = 0, lo = 0, guess = p.o;
+    var hi = this.fileSize ? Math.round(this.fileSize * 1.33) + 1048576 : -1;
+    var chanPos = this.chanPos || {}, rankT = p.c != null ? chanPos[p.c] : null;
+    var enc = window.TextEncoder ? new TextEncoder() : null;
+    var known = this.knownByCid();
+
+    function fail(why) { short.why = why; return short; }
+
+    function step() {
+      if (tries >= 10 || Date.now() - t0 > 6000) return fail('не найдено за ' + tries + ' запросов');
+      tries++;
+      var a = Math.max(0, lo, guess - 2048), b = a + 18431;
+      var ctrl = window.AbortController ? new AbortController() : null;
+      var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, 4000);
+      return fetch(self.url, { headers: { Range: 'bytes=' + a + '-' + b }, signal: ctrl ? ctrl.signal : undefined })
+        .then(function (res) {
+          if (res.status === 416) { clearTimeout(timer); return null; }
+          if (res.status !== 206) {
+            if (ctrl) ctrl.abort();
+            if (res.status === 200) self.ranges = false;   // отдаёт весь файл — кусками не умеет
+            throw new Error('HTTP ' + res.status);
           }
-        }
-        short.why = 'файл изменился (передачи нет на месте)';
-        return short;
-      }).catch(function (err) {
-        clearTimeout(timer);
-        short.why = err && err.name === 'AbortError' ? 'нет ответа за 6 с' : (err && err.message) || 'сеть';
-        return short;
+          return res.text();
+        }).then(function (txt) {
+          clearTimeout(timer);
+          if (txt === null) {                               // за концом файла (он стал короче)
+            if (hi < 0 || hi > a) hi = a;
+            guess = lo + Math.floor((hi - lo) / 2);
+            return step();
+          }
+          var re = /<programme\b([^>]*)>([\s\S]*?)<\/programme>/g, m, n = 0;
+          var before = false, after = false, delta = null;
+          var sMin = 0, sMax = 0, sN = 0, nearPs = 0, nearAt = 0;   // передачи того же канала в куске
+          while ((m = re.exec(txt))) {
+            n++;
+            var st = /\bstart\s*=\s*["']([^"']*)/.exec(m[1]);
+            var cm = /\bchannel\s*=\s*["']([^"']*)/.exec(m[1]);
+            var ps = st ? parseTime(st[1]) : 0, cid = cm ? cm[1] : '';
+            if (ps === p.s && (p.c == null || cid === p.c)) {
+              var tm = /<title[^>]*>([\s\S]*?)<\/title>/.exec(m[2]);
+              if (tm && decode(tm[1]) === p.t) {
+                var dm = /<desc[^>]*>([\s\S]*?)<\/desc>/.exec(m[2]);
+                Log.info('EPG: полное описание из файла за ' + (Date.now() - t0) + ' мс, запросов ' + tries);
+                return { d: dm ? decode(dm[1]) : '', src: 'network', why: '' };
+              }
+            }
+            if (p.c != null && cid === p.c) {
+              if (ps < p.s) before = true; else after = true;
+              sN++;
+              if (!sMin || ps < sMin) sMin = ps;
+              if (ps > sMax) sMax = ps;
+              if (!nearPs || Math.abs(ps - p.s) < Math.abs(nearPs - p.s)) { nearPs = ps; nearAt = a + Math.round(m.index / txt.length * 18432); }
+            }
+            else if (rankT != null && chanPos[cid] != null) { if (chanPos[cid] < rankT) before = true; else after = true; }
+            if (delta === null && enc && known[cid] && known[cid][ps] != null) {
+              delta = a + enc.encode(txt.slice(0, m.index)).length - known[cid][ps];
+            }
+          }
+          if (before && after) return fail('передачи уже нет в файле');
+          if (n === 0 && a < 2097152) before = true;        // ещё раздел каналов
+          else if (n === 0) after = true;                   // пустой кусок — за концом данных
+          if (before) lo = b - 4096;
+          if (after && (hi < 0 || hi > a + 4096)) hi = a + 4096;
+          var g = delta !== null ? p.o + delta : -1;
+          // Тот же канал, но соседей с известным местом нет: прикидываем по времени
+          // (сколько передач до цели) × (средний размер передачи в куске)
+          if (g < 0 && sN >= 2 && sMax > sMin) {
+            g = Math.round(nearAt + (p.s - nearPs) / ((sMax - sMin) / (sN - 1)) * (18432 / n));
+          }
+          if (g >= 0 && (g < a || g > b) && g >= lo && (hi < 0 || g < hi)) guess = g;
+          else if (hi >= 0) {
+            if (hi - lo < 4096) return fail('передача не найдена в файле');
+            guess = lo + Math.floor((hi - lo) / 2);
+          } else return fail('файл изменился (искать не по чему)');
+          return step();
+        });
+    }
+
+    return step().catch(function (err) {
+      return fail(err && err.name === 'AbortError' ? 'нет ответа за 4 с' : (err && err.message) || 'сеть');
+    });
+  },
+
+  // Старые места известных передач: { cid: { начало: байт } }. Строится один раз на программу.
+  knownByCid: function () {
+    if (this._knownSrc === this.byKey && this._known) return this._known;
+    var k = {}, by = this.byKey;
+    Object.keys(by).forEach(function (key) {
+      by[key].forEach(function (p) {
+        if (p.c != null && p.o != null) (k[p.c] || (k[p.c] = {}))[p.s] = p.o;
       });
+    });
+    this._known = k;
+    this._knownSrc = by;
+    return k;
   },
 
   hm: function (ms) {

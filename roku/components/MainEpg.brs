@@ -100,7 +100,7 @@ end function
 ' Content fields of a channel row / Поля строки канала
 function rowItem(k as integer) as object
     ch = m.channels[k]
-    it = { title: ch.t, HDPosterUrl: ch.l, shortDescriptionLine1: (k + 1).ToStr(), shortDescriptionLine2: "", epgS: 0, epgE: 0 }
+    it = { title: ch.t, HDPosterUrl: ch.l, shortDescriptionLine1: (k + 1).ToStr(), shortDescriptionLine2: "", epgS: 0, epgE: 0, epgT: 0 }
     pr = epgNowOf(k)
     if pr <> invalid then
         it.shortDescriptionLine2 = pr.t
@@ -123,6 +123,7 @@ sub refreshRows(radius as integer)
     if a < 0 then a = 0
     b = f + radius
     if b > n - 1 then b = n - 1
+    tick = CreateObject("roDateTime").AsSeconds() \ 60
     for p = a to b
         c = m.chanList.content.getChild(p)
         pr = epgNowOf(m.curIdx[p])
@@ -139,6 +140,7 @@ sub refreshRows(radius as integer)
             c.epgE = e
         end if
         if c.shortDescriptionLine2 <> t then c.shortDescriptionLine2 = t
+        if c.hasField("epgT") and c.epgT <> tick then c.epgT = tick
     end for
 end sub
 

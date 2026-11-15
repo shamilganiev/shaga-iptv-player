@@ -29,6 +29,8 @@ sub epgLoop()
     m.top.observeField("listKey", m.port)
     m.top.observeField("descReq", m.port)
     m.rangesOk = false      ' the server gives byte ranges / сервер отдаёт куски файла
+    m.chanPos = {}          ' order of channels in the file / порядок каналов в файле
+    m.fileSize = 0
     m.url = ""
     m.keys = {}
     m.progs = {}
@@ -251,6 +253,10 @@ function loadFromCache() as boolean
     m.fileIdList = idx.ids
     m.fileNames = idx.names
     m.rangesOk = (idx.ranges = true)
+    m.chanPos = idx.chanPos
+    if m.chanPos = invalid then m.chanPos = {}
+    m.fileSize = 0
+    if idx.size <> invalid then m.fileSize = idx.size
     ' Older than the refresh period: shown now, fresh file in the background (next loop pass)
     ' Старше срока обновления: показываем сейчас, свежий файл — в фоне (следующий проход цикла)
     m.nextLoad = m.loadedAt + m.cfg.epgRefreshSec
@@ -306,7 +312,7 @@ sub saveCache(ids as object, names as object)
         parts = parts + 1
     end if
     if ok then
-        ok = WriteAsciiFile(cacheFile(), FormatJson({ v: 3, url: m.url, loadedAt: m.loadedAt, base: base, parts: parts, ids: idList, names: names, ranges: m.rangesOk }, &h0001))
+        ok = WriteAsciiFile(cacheFile(), FormatJson({ v: 3, url: m.url, loadedAt: m.loadedAt, base: base, parts: parts, ids: idList, names: names, ranges: m.rangesOk, chanPos: m.chanPos, size: m.fileSize }, &h0001))
     end if
     for p = 0 to parts - 1
         st = fs.Stat(partFile(p))
@@ -348,6 +354,7 @@ sub loadFromNetwork()
     head = headRequest(m.url)
     dbg("EPG", "answer HTTP " + head.code.ToStr() + "; type " + head.ctype + ", size " + head.size.ToStr() + ", encoding " + head.enc + ", ranges " + head.ranges)
     m.rangesOk = (head.ranges = "bytes")
+    newSize = head.size
     if head.code < 200 or head.code >= 400 then
         failLoad("http " + head.code.ToStr())
         return
@@ -388,6 +395,8 @@ sub loadFromNetwork()
     end if
     ids = ep.fileIds
     names = ep.fileNames
+    m.chanPos = ep.chanPos
+    m.fileSize = newSize
     m.ep = invalid
     m.fileIdList = []
     for each fid in ids
@@ -699,7 +708,7 @@ sub answerDesc(q as dynamic)
     else if o < 0 then
         ans.why = "no place in the file"
     else
-        full = fetchDesc(o, q.s, pr.t[k])
+        full = fetchDesc(o, q.s, pr.t[k], fid)
         if full.ok then
             ans.d = full.d
             ans.src = "network"
@@ -710,41 +719,150 @@ sub answerDesc(q as dynamic)
     m.top.descAns = ans
 end sub
 
-function fetchDesc(o as integer, s as integer, title as string) as object
+' 1.3.7: the provider rebuilds the file every few hours and programmes move. If the programme
+' is not at its place, it is searched for: every chunk shows programmes whose old places are
+' known (the shift is taken from them) and tells whether the target is before or after
+' (channels keep their order in the file, programmes go by time). Up to 10 requests / 6 s.
+' 1.3.7: провайдер пересобирает файл каждые несколько часов, передачи сдвигаются. Если передачи
+' нет на месте — ищем: в каждом куске видны передачи, чьи старые места известны (по ним берём
+' сдвиг), и понятно, раньше цель или позже (порядок каналов в файле сохраняется, передачи идут
+' по времени). До 10 запросов / 6 с.
+function fetchDesc(o as integer, s as integer, title as string, fid as string) as object
     t0 = CreateObject("roTimespan")
-    a = o - 2048
-    if a < 0 then a = 0
+    lo = 0
+    hi = -1
+    if m.fileSize > 0 then hi = m.fileSize + m.fileSize \ 3 + 1048576
+    guess = o
+    rankT = m.chanPos[fid]
+    tries = 0
+    while tries < 10 and t0.TotalMilliseconds() < 6000
+        tries = tries + 1
+        a = guess - 2048
+        if a < lo then a = lo
+        if a < 0 then a = 0
+        b = a + 18431
+        r = rangeGet(a, b)
+        if r.total > 0 and (hi < 0 or hi > r.total) then hi = r.total
+        if r.code = 416 then
+            ' Beyond the end of the (now shorter) file / За концом файла (он стал короче)
+            if hi < 0 or hi > a then hi = a
+            guess = lo + (hi - lo) \ 2
+        else if r.code <> 206 then
+            return { ok: false, why: r.why }
+        else
+            text = r.text
+            from = 0
+            delta = invalid
+            before = false
+            after = false
+            n = 0
+            sMin = 0
+            sMax = 0
+            sN = 0
+            nearPs = 0
+            nearAt = 0
+            while true
+                p = text.Instr(from, "<programme")
+                if p < 0 then exit while
+                e = text.Instr(p, "</programme>")
+                if e < 0 then exit while
+                piece = text.Mid(p, e - p)
+                from = e + 12
+                te = piece.Instr(">")
+                if te > 0 then
+                    head = piece.Left(te)
+                    cid = epgAttr(head, "channel")
+                    st = epgAttr(head, "start")
+                    ps = -1
+                    if st.Len() >= 14 then ps = epgToEpoch(st.Left(14), st.Mid(14).Trim())
+                    n = n + 1
+                    if cid = fid and ps = s and epgTag(piece, "title", te) = title then
+                        d = epgTag(piece, "desc", te)
+                        dbg("EPG", "full description from the file in " + t0.TotalMilliseconds().ToStr() + " ms, " + tries.ToStr() + " request(s), " + d.Len().ToStr() + " chars")
+                        return { ok: true, d: d }
+                    end if
+                    if cid = fid then
+                        if ps < s then before = true else after = true
+                        ' Same channel: remember the spread and the nearest one / Тот же канал: разброс и ближайшая
+                        sN = sN + 1
+                        if sMin = 0 or ps < sMin then sMin = ps
+                        if ps > sMax then sMax = ps
+                        if nearPs = 0 or Abs(ps - s) < Abs(nearPs - s) then
+                            nearPs = ps
+                            nearAt = a + Int(p / text.Len() * 18432)
+                        end if
+                    else if rankT <> invalid and m.chanPos[cid] <> invalid then
+                        if m.chanPos[cid] < rankT then before = true else after = true
+                    end if
+                    if delta = invalid then
+                        kp = m.progs[cid]
+                        if kp <> invalid and kp.o <> invalid then
+                            for i = 0 to kp.s.Count() - 1
+                                if kp.s[i] = ps then
+                                    if i < kp.o.Count() then delta = a + descBytes(text.Left(p)) - kp.o[i]
+                                    exit for
+                                end if
+                            end for
+                        end if
+                    end if
+                end if
+            end while
+            if before and after then return { ok: false, why: "programme is not in the file any more" }
+            if n = 0 and a < 2097152 then
+                before = true      ' still the <channel> section / ещё раздел каналов
+            else if n = 0 then
+                after = true       ' empty chunk: beyond the data / пустой кусок — за концом данных
+            end if
+            if before then lo = b - 4096
+            if after and (hi < 0 or hi > a + 4096) then hi = a + 4096
+            g = -1
+            if delta <> invalid then g = o + delta
+            ' Same channel but no neighbours with a known place: estimate by time
+            ' Тот же канал, но соседей с известным местом нет: прикидываем по времени
+            if g < 0 and sN >= 2 and sMax > sMin then
+                g = Int(nearAt + (s - nearPs) / ((sMax - sMin) / (sN - 1)) * (18432 / n))
+            end if
+            if g >= 0 and (g < a or g > b) and g >= lo and (hi < 0 or g < hi) then
+                guess = g
+            else if hi >= 0 then
+                if hi - lo < 4096 then return { ok: false, why: "programme not found in the file" }
+                guess = lo + (hi - lo) \ 2
+            else
+                return { ok: false, why: "file changed (no way to search)" }
+            end if
+        end if
+    end while
+    return { ok: false, why: "not found in " + tries.ToStr() + " requests" }
+end function
+
+function descBytes(t as string) as integer
+    ba = CreateObject("roByteArray")
+    ba.FromAsciiString(t)
+    return ba.Count()
+end function
+
+' One piece of the file / Один кусок файла: { code, text, total, why }
+function rangeGet(a as integer, b as integer) as object
+    res = { code: 0, text: "", total: 0, why: "network" }
     port = CreateObject("roMessagePort")
     req = newRequest(m.url)
     req.SetMessagePort(port)
-    req.AddHeader("Range", "bytes=" + a.ToStr() + "-" + (o + 16383).ToStr())
-    if not req.AsyncGetToString() then return { ok: false, why: "network" }
-    msg = wait(6000, port)
+    req.AddHeader("Range", "bytes=" + a.ToStr() + "-" + b.ToStr())
+    if not req.AsyncGetToString() then return res
+    msg = wait(4000, port)
     if type(msg) <> "roUrlEvent" then
         req.AsyncCancel()
-        return { ok: false, why: "no answer in 6 s" }
+        res.why = "no answer in 4 s"
+        return res
     end if
-    if msg.GetResponseCode() <> 206 then return { ok: false, why: "http " + msg.GetResponseCode().ToStr() }
-    text = msg.GetString()
-    ' Find the same programme: start time and title / Ищем ту же передачу: начало и название
-    from = 0
-    while true
-        p = text.Instr(from, "<programme")
-        if p < 0 then exit while
-        e = text.Instr(p, "</programme>")
-        if e < 0 then exit while
-        piece = text.Mid(p, e - p)
-        te = piece.Instr(">")
-        if te > 0 then
-            head = piece.Left(te)
-            st = epgAttr(head, "start")
-            if st.Len() >= 14 and epgToEpoch(st.Left(14), st.Mid(14).Trim()) = s and epgTag(piece, "title", te) = title then
-                d = epgTag(piece, "desc", te)
-                dbg("EPG", "full description from the file in " + t0.TotalMilliseconds().ToStr() + " ms, " + d.Len().ToStr() + " chars")
-                return { ok: true, d: d }
-            end if
-        end if
-        from = e + 12
-    end while
-    return { ok: false, why: "file changed (programme not at its place)" }
+    res.code = msg.GetResponseCode()
+    res.why = "http " + res.code.ToStr()
+    res.text = msg.GetString()
+    h = msg.GetResponseHeaders()
+    if h <> invalid and h["content-range"] <> invalid then
+        cr = h["content-range"]
+        sl = cr.Instr("/")
+        if sl >= 0 then res.total = cr.Mid(sl + 1).ToInt()
+    end if
+    return res
 end function

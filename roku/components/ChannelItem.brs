@@ -26,10 +26,16 @@ end sub
 
 sub onContent()
     c = m.top.itemContent
-    if m.watched <> invalid then m.watched.unobserveFieldScoped("shortDescriptionLine2")
+    if m.watched <> invalid then
+        m.watched.unobserveFieldScoped("shortDescriptionLine2")
+        m.watched.unobserveFieldScoped("epgT")
+    end if
     m.watched = c
     if c = invalid then return
     c.observeFieldScoped("shortDescriptionLine2", "onProgramme")
+    ' 1.3.7: the scene changes epgT every minute, so the bar moves (it was drawn once before)
+    ' 1.3.7: сцена меняет epgT каждую минуту — полоска двигается (раньше рисовалась один раз)
+    if c.hasField("epgT") then c.observeFieldScoped("epgT", "onProgramme")
     m.numLabel.text = c.shortDescriptionLine1
     m.titleLabel.text = c.title
     m.logo.uri = c.HDPosterUrl
