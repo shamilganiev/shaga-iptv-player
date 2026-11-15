@@ -37,6 +37,21 @@ sub setGroupMode(data as object, name as string, mode as string)
     data.groupModes[groupModeKey(name)] = mode
 end sub
 
+' 1.3.6: "18+ group" mark set by the user (by default — by the group name). The last channel
+' of such a group is never played or focused at start: "All channels", channel 1 instead.
+' 1.3.6: отметка «Группа 18+» от пользователя (по умолчанию — по названию группы). Последний
+' канал такой группы при запуске не включается и не выделяется: вместо него «Все каналы», канал 1.
+function groupIsAdult(data as object, name as string) as boolean
+    v = data.groupModes["a:" + name]
+    if v = "1" then return true
+    if v = "0" then return false
+    return isAdultGroup(name)
+end function
+
+sub setGroupAdult(data as object, name as string, isAdult as boolean)
+    if isAdult then data.groupModes["a:" + name] = "1" else data.groupModes["a:" + name] = "0"
+end sub
+
 ' Protection strength: shown 0 < PIN 1 < hidden 2 / Сила защиты: показана < PIN < скрыта
 function modeStrength(mode as string) as integer
     if mode = "h" then return 2

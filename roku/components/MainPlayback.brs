@@ -307,6 +307,12 @@ function autoplayLast() as boolean
         dbg("PLAY", "last channel is in a hidden or PIN group, no autoplay")
         return false
     end if
+    if groupIsAdult(m.data, lc.g) then
+        ' 18+ group: not played, not focused; "All channels", channel 1 stays selected
+        ' Группа 18+: не включаем и не выделяем; остаются «Все каналы», канал 1
+        dbg("PLAY", "last channel is in an 18+ group, no autoplay")
+        return false
+    end if
     i = groupCat(m.channels[k].gi)
     if i < 0 then return false
     if i <> m.curCat or m.catList.itemFocused <> i then

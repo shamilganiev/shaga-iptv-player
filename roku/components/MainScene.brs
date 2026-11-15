@@ -646,7 +646,7 @@ function lastChannelCat() as integer
     lc = m.data.lastChannel
     if lc = invalid or m.channels = invalid then return -1
     k = findChannel(lc.n, lc.g)
-    if k < 0 or groupMode(m.data, lc.g) <> "s" then return -1
+    if k < 0 or groupMode(m.data, lc.g) <> "s" or groupIsAdult(m.data, lc.g) then return -1
     return groupCat(m.channels[k].gi)
 end function
 

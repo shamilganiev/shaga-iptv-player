@@ -76,7 +76,8 @@ var Browser = {
     c.num.textContent = ch.n;
     c.name.textContent = ch.name;
     var p = EPG.now(ch);
-    c.prog.textContent = p ? p.t : '';
+    // Выделенная строка — длинное название передачи бежит (1.3.6)
+    marquee(c.prog, p ? p.t : '', row.classList.contains('focus'));
     c.bar.classList.toggle('off', !p);
     if (p) c.fill.style.width = Math.round(EPG.progress(p) * 100) + '%';
     if (c.src !== ch.logo) {
@@ -99,7 +100,7 @@ var Browser = {
     }
     var now = Date.now(), cur = p.s <= now && now < p.e;
     row._p.time.textContent = (cur ? '> ' : '') + Browser.dayPrefix(p.s) + EPG.hm(p.s);
-    row._p.title.textContent = p.t;
+    marquee(row._p.title, p.t, row.classList.contains('focus'));
     row.classList.toggle('past', p.e <= now);
     row.classList.toggle('cur', cur);
   },
@@ -133,10 +134,10 @@ var Browser = {
     }
     $('cHead').textContent = cur ? cur.name : '';
 
-    if (this.panel === 'prog' && this.progCh) { $('iHead').textContent = this.progCh.name; return; }
-    if (playing && Player.arch) { $('iHead').textContent = t('archLabel') + ': ' + Player.arch.t; return; }
+    if (this.panel === 'prog' && this.progCh) { marquee($('iHead'), this.progCh.name, true); return; }
+    if (playing && Player.arch) { marquee($('iHead'), t('archLabel') + ': ' + Player.arch.t, true); return; }
     var src = playing || cur, p = src ? EPG.now(src) : null;
-    $('iHead').textContent = p ? p.t : (src ? src.name : '');
+    marquee($('iHead'), p ? p.t : (src ? src.name : ''), true);
   },
 
   // ---------- Третья колонка: программа канала под курсором ----------

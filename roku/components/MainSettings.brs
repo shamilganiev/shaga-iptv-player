@@ -268,6 +268,8 @@ sub openGroupModeDialog(gi as integer, row as integer)
         if md = cur then mark = "* "
         buttons.push(mark + modeText(md))
     end for
+    ' 1.3.6: the "18+ group" switch / переключатель «Группа 18+»
+    if groupIsAdult(m.data, m.groups[gi].name) then buttons.push(m.S.adultOn) else buttons.push(m.S.adultOff)
     buttons.push(m.S.cancel)
     dlg = newMessageDialog(groupTitle(gi), [m.S.groupModeMsg], buttons)
     curIdx = 0
@@ -280,6 +282,26 @@ end sub
 ' Called from onDialogButton for kind "groupMode" / Вызывается для окна "groupMode"
 sub onGroupModeButton(b as integer, ctx as object)
     modes = ["s", "p", "h"]
+    if b = 3 then
+        ' Set the mark: no PIN (stronger). Remove it: PIN, like weakening a group.
+        ' Поставить отметку — без PIN (усиление). Снять — с PIN, как ослабление группы.
+        gi = ctx.gi
+        if not groupIsAdult(m.data, m.groups[gi].name) then
+            closeDialog()
+            applyGroupAdult(gi, true, ctx.row)
+            return
+        end if
+        after = { action: "setAdult", gi: gi, on: false, row: ctx.row }
+        if m.settingsPinOk then
+            closeDialog()
+            applyGroupAdult(gi, false, ctx.row)
+        else if not pinIsSet(m.data) then
+            startPinCreate(after)
+        else
+            openPinCheck(after)
+        end if
+        return
+    end if
     if b < 0 or b > 2 then
         closeDialog()
         return
@@ -313,6 +335,16 @@ sub onGroupModeButton(b as integer, ctx as object)
             openPinCheck(after)
         end if
     end if
+end sub
+
+' Save the 18+ mark and show the same window again / Сохранить отметку 18+ и снова открыть окно
+sub applyGroupAdult(gi as integer, isAdult as boolean, row as integer)
+    name = m.groups[gi].name
+    setGroupAdult(m.data, name, isAdult)
+    storageSave(m.data)
+    dbg("UI", "group '" + name + "' 18+=" + isAdult.ToStr())
+    if m.view = "settings" then buildSettingsRows(row)
+    openGroupModeDialog(gi, row)
 end sub
 
 sub applyGroupMode(gi as integer, mode as string, row as integer)
@@ -410,6 +442,8 @@ sub onPinDialogButton(kind as string, b as integer, ctx as dynamic)
             m.pinAfter = invalid
             if after <> invalid and after.action = "setGroup" then
                 applyGroupMode(after.gi, after.mode, after.row)
+            else if after <> invalid and after.action = "setAdult" then
+                applyGroupAdult(after.gi, after.on, after.row)
             else if m.view = "settings" then
                 buildSettingsRows(0)
             end if
@@ -451,6 +485,8 @@ sub doAfterPin(after as dynamic)
     m.settingsPinOk = true
     if after.action = "setGroup" then
         applyGroupMode(after.gi, after.mode, after.row)
+    else if after.action = "setAdult" then
+        applyGroupAdult(after.gi, after.on, after.row)
     else if after.action = "changePin" then
         startPinCreate({ action: "none" })
     else if after.action = "removePin" then

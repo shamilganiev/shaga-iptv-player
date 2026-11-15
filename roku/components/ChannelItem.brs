@@ -17,6 +17,7 @@ sub init()
     m.logo = m.top.findNode("logo")
     m.titleLabel = m.top.findNode("title")
     m.progLabel = m.top.findNode("prog")
+    m.progScroll = m.top.findNode("progScroll")
     m.progBg = m.top.findNode("progBg")
     m.progBar = m.top.findNode("progBar")
     m.isDark = false
@@ -40,6 +41,7 @@ sub onProgramme()
     c = m.top.itemContent
     if c = invalid then return
     m.progLabel.text = c.shortDescriptionLine2
+    m.progScroll.text = c.shortDescriptionLine2
     s = 0
     e = 0
     if c.hasField("epgS") then
@@ -65,17 +67,19 @@ sub onFocus()
     dark = (m.top.listHasFocus = true and m.top.focusPercent > 0.5)
     if dark = m.isDark then return
     m.isDark = dark
+    ' Focused row: scrolling programme line instead of the cut one / Выделенная строка: бегущая строка вместо обрезанной
+    m.progScroll.visible = dark
+    m.progLabel.visible = not dark
     if dark then
         m.titleLabel.color = "0x14121CFF"
-        m.progLabel.color = "0x2C2450FF"
         m.numLabel.color = "0x2C2450FF"
-        m.progBg.color = "0x7C6BC9FF"
+        m.progBg.color = "0x6E62A8FF"
         m.progBar.color = "0x14121CFF"
     else
         m.titleLabel.color = "0xECE9F6FF"
         m.progLabel.color = "0xA39DB8FF"
         m.numLabel.color = "0xA39DB8FF"
-        m.progBg.color = "0x322D45FF"
-        m.progBar.color = "0xA995FFFF"
+        m.progBg.color = "0x5A5470FF"
+        m.progBar.color = "0xF5B83DFF"
     end if
 end sub

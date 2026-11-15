@@ -4,6 +4,28 @@ var ICON_LOCK = '<svg viewBox="0 0 24 24"><path d="M7 10V7.5a5 5 0 0110 0V10h1.5
 
 function $(id) { return document.getElementById(id); }
 
+// 1.3.6: бегущая строка для длинного текста (название передачи у выделенной строки, заголовок колонки).
+// on = false — обычный текст с «…». Web Animations: есть на webOS 4 (Chromium 53).
+function marquee(el, text, on) {
+  if (el._mqAnim) { el._mqAnim.cancel(); el._mqAnim = null; }
+  el.textContent = text;
+  if (!on || !text || !el.animate) return;
+  var span = document.createElement('span');
+  span.className = 'mq-in';
+  span.textContent = text;
+  el.textContent = '';
+  el.appendChild(span);
+  var diff = span.offsetWidth - el.clientWidth;
+  if (diff <= 4) { el.textContent = text; return; }
+  var ms = Math.max(4000, diff * 40);
+  el._mqAnim = span.animate([
+    { transform: 'translateX(0)', offset: 0 },
+    { transform: 'translateX(0)', offset: 0.15 },
+    { transform: 'translateX(' + (-diff) + 'px)', offset: 0.85 },
+    { transform: 'translateX(' + (-diff) + 'px)', offset: 1 }
+  ], { duration: ms, iterations: Infinity, direction: 'alternate' });
+}
+
 // ---------- Короткое сообщение внизу экрана ----------
 var Toast = {
   timer: null,

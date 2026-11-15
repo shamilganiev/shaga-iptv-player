@@ -161,6 +161,8 @@ var I18N = {
     yesterday: 'yesterday',
     tomorrow: 'tomorrow',
     noDesc: 'No description.',
+    adultOn: '[x] 18+ group (never started on launch)',
+    adultOff: '[ ] 18+ group',
     descLoading: 'Loading the full description…',
     // выход
     exitTitle: 'Close ShaGa IPTV Player?',
@@ -314,6 +316,8 @@ var I18N = {
     yesterday: 'ayer',
     tomorrow: 'mañana',
     noDesc: 'Sin descripción.',
+    adultOn: '[x] Grupo 18+ (no se inicia al abrir)',
+    adultOff: '[ ] Grupo 18+',
     descLoading: 'Cargando la descripción completa…',
     exitTitle: '¿Cerrar ShaGa IPTV Player?',
     exit: 'Cerrar'
@@ -466,6 +470,8 @@ var I18N = {
     yesterday: 'вчера',
     tomorrow: 'завтра',
     noDesc: 'Описания нет.',
+    adultOn: '[x] Группа 18+ (не включать при запуске)',
+    adultOff: '[ ] Группа 18+',
     descLoading: 'Загружаю полное описание…',
     exitTitle: 'Закрыть ShaGa IPTV Player?',
     exit: 'Закрыть'

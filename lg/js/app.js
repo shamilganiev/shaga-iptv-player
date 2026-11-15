@@ -21,7 +21,7 @@ function isInput(el) {
 }
 
 var App = {
-  version: '1.3.4',
+  version: '1.3.6',
   PRIVACY_URL: 'https://shamilganiev.github.io/shaga-iptv-player/privacy.html',
   SUPPORT_URL: 'https://github.com/shamilganiev/shaga-iptv-player/issues',
   MAX_FAV: 200,
@@ -398,6 +398,16 @@ var App = {
   },
 
   isHidden: function (g) { return Config.d.hidden.indexOf(g) >= 0; },
+  // 1.3.6: отметка «Группа 18+» от пользователя; по умолчанию — по названию группы
+  isAdultGroup: function (g) {
+    var a = Config.d.adult || {};
+    return g in a ? !!a[g] : Text.isAdult(g);
+  },
+  setAdultGroup: function (g, on) {
+    (Config.d.adult || (Config.d.adult = {}))[g] = on;
+    Config.save();
+    Log.info('Группа «' + g + '»: 18+ = ' + on);
+  },
   // Без PIN-кода замок не действует
   isLocked: function (g) { return !!Config.d.pin && Config.d.locked.indexOf(g) >= 0; },
   // Канал недоступен без PIN: группа скрыта или закрыта
@@ -474,6 +484,8 @@ var App = {
     }
     // Каналы под PIN-кодом автоматически не включаем
     if (idx < 0 || this.isRestricted(list[idx].group)) return;
+    // 1.3.6: группа 18+ — не включаем и не выделяем; остаются «Все каналы», канал 1
+    if (this.isAdultGroup(list[idx].group)) { Log.info('Последний канал из группы 18+ — без автозапуска'); return; }
     Player.play(list, idx, gid);
     this.show('player');
   },

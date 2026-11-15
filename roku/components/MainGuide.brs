@@ -108,8 +108,9 @@ end sub
 sub onProgFocused()
     i = m.progList.itemFocused
     if i < 0 or i >= m.progItems.Count() then return
-    d = m.progItems[i].d
-    if d = "" then d = m.progItems[i].t
+    ' Full title first (the list cuts long ones), then the description / Сначала полное название, потом описание
+    d = m.progItems[i].t
+    if m.progItems[i].d <> "" then d = d + ". " + m.progItems[i].d
     m.progDesc.text = d
 end sub
 

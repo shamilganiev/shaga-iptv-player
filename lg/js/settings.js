@@ -263,6 +263,15 @@ var Settings = {
     var items = opts.map(function (o) {
       return { label: t(o[1]), mark: o[0] === st, action: function () { self.setGroupState(g, o[0]); } };
     });
+    // 1.3.6: переключатель «Группа 18+»: поставить — без PIN, снять — с PIN (как ослабление)
+    var adult = App.isAdultGroup(g);
+    items.push({ label: t(adult ? 'adultOn' : 'adultOff'), action: function () {
+      var done = function () { App.setAdultGroup(g, !adult); self.glist.render(); self.cycleGroup(i); };
+      if (!adult) { done(); return; }
+      if (!Config.d.pin) App.setNewPin(function () { self.pinOk = true; done(); }, t('pinCreateFirst'));
+      else if (!self.pinOk) App.askPin(function () { self.pinOk = true; done(); });
+      else done();
+    } });
     items.push({ label: t('cancel') });
     Menu.open(g || t('noGroup'), t('groupModeMsg'), items, { focus: ['visible', 'locked', 'hidden'].indexOf(st) });
   },
