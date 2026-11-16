@@ -15,9 +15,9 @@ android {
         applicationId = "com.shaga.player"
         minSdk = 24        // Android 7.0
         targetSdk = 36     // Android 16
-        // versionCode = MAJOR*10000 + MINOR*100 + PATCH  (0.4.1 -> 401)
-        versionCode = 401
-        versionName = "0.4.1"
+        // versionCode = MAJOR*10000 + MINOR*100 + PATCH  (0.4.2 -> 402)
+        versionCode = 402
+        versionName = "0.4.2"
     }
 
     // One fixed test key in the repository, so that every build from GitHub installs

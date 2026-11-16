@@ -198,6 +198,13 @@ class MainActivity : ComponentActivity(), NavHost {
             return true
         }
 
+        // INFO and MENU keys of a remote open the context menu, like a long OK.
+        // Кнопки INFO и MENU пульта открывают контекстное меню, как долгое OK.
+        if ((code == KeyEvent.KEYCODE_INFO || code == KeyEvent.KEYCODE_MENU) && ui.screen == Screen.MAIN) {
+            if (first) longOk()
+            return true
+        }
+
         // Digits: the channel number / Цифры: номер канала
         if (digit >= 0 && ui.screen == Screen.MAIN) {
             if (first) pressDigit(digit)
@@ -416,9 +423,12 @@ class MainActivity : ComponentActivity(), NavHost {
     // Settings; without a PIN it must be created first. "Locked" without a PIN also creates one.
     // Ослабление защиты (Скрыта -> любое, По PIN -> Показана) требует PIN один раз за заход в
     // Настройки; без PIN его сначала надо создать. «По PIN» без PIN тоже сначала создаёт его.
-    private fun setGroupMode(g: String, next: GroupMode) {
+    private fun setGroupMode(g: String, next: GroupMode, after: () -> Unit = {}) {
         val cur = Protection.mode(g)
-        if (next == cur) return
+        if (next == cur) {
+            after()
+            return
+        }
         val weaker = cur == GroupMode.HIDDEN || (cur == GroupMode.PIN && next == GroupMode.SHOWN)
         val apply = {
             Protection.modes[g] = next
@@ -426,6 +436,7 @@ class MainActivity : ComponentActivity(), NavHost {
             Storage.save(this)
             AppLog.i("UI", "group mode: " + cur.code + " -> " + next.code)
             afterProtectionChange()
+            after()
         }
         guardWeaker(weaker, next == GroupMode.PIN, apply)
     }
@@ -441,12 +452,13 @@ class MainActivity : ComponentActivity(), NavHost {
 
     // The "18+ group" mark: putting it on needs nothing, taking it off is like weaker protection.
     // Отметка «Группа 18+»: поставить можно без PIN, снять — как ослабление защиты.
-    private fun setAdult(g: String, on: Boolean) {
+    private fun setAdult(g: String, on: Boolean, after: () -> Unit = {}) {
         val apply = {
             Protection.adult[g] = on
             Storage.save(this)
             AppLog.i("UI", "group 18+ mark: $on")
             afterProtectionChange()
+            after()
         }
         if (on) apply() else guardWeaker(true, false, apply)
     }
@@ -1171,17 +1183,20 @@ class MainActivity : ComponentActivity(), NavHost {
         }
     }
 
-    // OK on a group: three modes (the current one is marked), the 18+ switch, Cancel.
-    // OK на группе: три режима (текущий отмечен), переключатель 18+, Отмена.
-    private fun groupModeWindow(g: String) {
+    // OK on a group: three modes (the current one is marked), the 18+ switch, Close.
+    // After a change the window opens again, so the new mark and [x] are seen at once.
+    // OK на группе: три режима (текущий отмечен), переключатель 18+, Закрыть.
+    // После изменения окно открывается снова, чтобы новая отметка и [x] были видны сразу.
+    private fun groupModeWindow(g: String, start: Int = -1) {
         val cur = Protection.mode(g)
         val modes = listOf(GroupMode.SHOWN, GroupMode.PIN, GroupMode.HIDDEN)
         val items = modes.map { PopItem(modeText(it), it == cur) } +
-            PopItem(S.t(if (Protection.isAdult(g)) "adultOn" else "adultOff")) + PopItem(S.t("cancel"))
-        showPopup(Popup("group mode", g.ifEmpty { S.t("noGroup") }, S.t("groupModeMsg"), items, modes.indexOf(cur), { i ->
+            PopItem(S.t(if (Protection.isAdult(g)) "adultOn" else "adultOff")) + PopItem(S.t("close"))
+        val first = if (start >= 0) start else modes.indexOf(cur)
+        showPopup(Popup("group mode", g.ifEmpty { S.t("noGroup") }, S.t("groupModeMsg"), items, first, { i ->
             when (i) {
-                in 0..2 -> setGroupMode(g, modes[i])
-                3 -> setAdult(g, !Protection.isAdult(g))
+                in 0..2 -> setGroupMode(g, modes[i]) { groupModeWindow(g, i) }
+                3 -> setAdult(g, !Protection.isAdult(g)) { groupModeWindow(g, 3) }
                 else -> {}
             }
         }))

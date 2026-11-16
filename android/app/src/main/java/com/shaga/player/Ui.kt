@@ -32,6 +32,8 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -451,6 +453,7 @@ private fun GroupsColumn(modifier: Modifier, nav: Nav, tick: Int, onTap: (Int) -
     val sel = nav.groupSel
     val focused = nav.column == Pane.GROUPS
     val cursor = nav.keyMode && focused
+    val playCat = nav.playCat           // read here: the rows below must see its new value / читаем здесь, чтобы строки видели новое значение
     val listState = remember(rows) { LazyListState(maxOf(0, sel - 2)) }
     val rowPx = with(LocalDensity.current) { Config.ROW_GROUP_DP.dp.roundToPx() }
     KeepVisible(listState, sel, rowPx, rows) { nav.groupsPerPage = it }
@@ -463,7 +466,7 @@ private fun GroupsColumn(modifier: Modifier, nav: Nav, tick: Int, onTap: (Int) -
                 val cat: Category? = row.category
                 val look = rowLook(
                     onCursor = cursor && i == sel,
-                    isPlaying = cat != null && cat === nav.playCat,
+                    isPlaying = cat != null && cat === playCat,
                     focusedColumn = focused,
                     selectedHere = i == sel && !cursor
                 )
@@ -610,12 +613,14 @@ private fun SettingsPanel(modifier: Modifier, page: SettingsPage, tick: Int, isT
 
 // ---------- our windows / наши окна ----------
 
+// A plain Column, not a lazy list: a lazy list keeps its rows when the Popup object is the
+// same, and the cursor would not move (the menus have few items anyway).
+// Обычный Column, а не ленивый список: ленивый список сохраняет строки, если объект Popup тот
+// же, и курсор бы не двигался (пунктов в меню всё равно немного).
 @Composable
 private fun PopupWindow(p: Popup, tick: Int, onTap: (Int) -> Unit, onOutside: () -> Unit) {
     if (tick < 0) return
-    val rowPx = with(LocalDensity.current) { 46.dp.roundToPx() }
-    val listState = remember(p) { LazyListState(maxOf(0, p.sel - 3)) }
-    KeepVisible(listState, p.sel, rowPx, p) {}
+    val sel = p.sel
     Box(Modifier.fillMaxSize().background(Ui.Dim).taps(p, onOutside), contentAlignment = Alignment.Center) {
         Column(
             Modifier.widthIn(max = 680.dp).padding(24.dp)
@@ -629,9 +634,10 @@ private fun PopupWindow(p: Popup, tick: Int, onTap: (Int) -> Unit, onOutside: ()
                 Label(p.message, color = Ui.Muted, size = 16)
             }
             Spacer(Modifier.height(12.dp))
-            LazyColumn(state = listState, modifier = Modifier.heightIn(max = 420.dp)) {
-                itemsIndexed(p.items) { i, it ->
-                    val on = i == p.sel
+            Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
+                for (i in p.items.indices) {
+                    val it = p.items[i]
+                    val on = i == sel
                     ListRow(index = i, height = 46.dp, background = if (on) Ui.Amber else Color.Transparent, onTap = onTap, onHold = onTap) {
                         Label((if (it.mark) "* " else "") + it.label, color = if (on) Ui.Ink else Ui.Text, size = 18, maxLines = 1)
                     }
