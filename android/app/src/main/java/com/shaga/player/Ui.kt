@@ -382,16 +382,16 @@ private fun MainScreen(
                 TopLine(ui, playing)
                 Spacer(Modifier.height(8.dp))
                 if (settings != null) {
-                    SettingsPanel(Modifier.fillMaxWidth().weight(1f), settings, ui.isTv, act)
+                    SettingsPanel(Modifier.fillMaxWidth().weight(1f), settings, tick, ui.isTv, act)
                 } else if (wide) {
                     Row(Modifier.fillMaxWidth().weight(1f)) {
                         GroupsColumn(
-                            Modifier.weight(0.27f).fillMaxHeight(), nav,
+                            Modifier.weight(0.27f).fillMaxHeight(), nav, tick,
                             onTap = { nav.tapGroup(it) }, onHold = { nav.holdGroup(it) }
                         )
                         Spacer(Modifier.width(10.dp))
                         ChannelsColumn(
-                            Modifier.weight(0.40f).fillMaxHeight(), nav, channels,
+                            Modifier.weight(0.40f).fillMaxHeight(), nav, tick, channels,
                             backTitle = "", emptyText = emptyText
                         )
                         Spacer(Modifier.width(10.dp))
@@ -403,12 +403,12 @@ private fun MainScreen(
                     }
                 } else if (nav.column == Pane.GROUPS) {
                     GroupsColumn(
-                        Modifier.fillMaxWidth().weight(1f), nav,
+                        Modifier.fillMaxWidth().weight(1f), nav, tick,
                         onTap = { nav.tapGroup(it) }, onHold = { nav.holdGroup(it) }
                     )
                 } else {
                     ChannelsColumn(
-                        Modifier.fillMaxWidth().weight(1f), nav, channels,
+                        Modifier.fillMaxWidth().weight(1f), nav, tick, channels,
                         backTitle = shown?.title ?: "", emptyText = emptyText
                     )
                 }
@@ -440,8 +440,13 @@ private fun rowText(row: LeftRow): String {
     return if (cat.locked) cat.title + " [PIN]" else cat.title + " (" + cat.channels.size + ")"
 }
 
+// tick: Nav is the same object after every change, and Compose skips a function whose
+// arguments have not changed. The growing tick makes the list draw the new cursor.
+// tick: после каждого изменения Nav остаётся тем же объектом, а Compose пропускает функцию,
+// у которой аргументы не изменились. Растущий tick заставляет список нарисовать новый курсор.
 @Composable
-private fun GroupsColumn(modifier: Modifier, nav: Nav, onTap: (Int) -> Unit, onHold: (Int) -> Unit) {
+private fun GroupsColumn(modifier: Modifier, nav: Nav, tick: Int, onTap: (Int) -> Unit, onHold: (Int) -> Unit) {
+    if (tick < 0) return
     val rows = nav.rows
     val sel = nav.groupSel
     val focused = nav.column == Pane.GROUPS
@@ -471,7 +476,8 @@ private fun GroupsColumn(modifier: Modifier, nav: Nav, onTap: (Int) -> Unit, onH
 }
 
 @Composable
-private fun ChannelsColumn(modifier: Modifier, nav: Nav, channels: List<Channel>, backTitle: String, emptyText: String) {
+private fun ChannelsColumn(modifier: Modifier, nav: Nav, tick: Int, channels: List<Channel>, backTitle: String, emptyText: String) {
+    if (tick < 0) return
     val sel = nav.chanSel
     val focused = nav.column == Pane.CHANNELS
     val cursor = nav.keyMode && focused
@@ -554,7 +560,8 @@ private fun InfoColumn(modifier: Modifier, channel: Channel?, isPlaying: Boolean
 // ---------- settings / настройки ----------
 
 @Composable
-private fun SettingsPanel(modifier: Modifier, page: SettingsPage, isTv: Boolean, act: UiActions) {
+private fun SettingsPanel(modifier: Modifier, page: SettingsPage, tick: Int, isTv: Boolean, act: UiActions) {
+    if (tick < 0) return
     val rows = page.rows
     val sel = page.sel
     val log = page.page == SetPage.LOG
