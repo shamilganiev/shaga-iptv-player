@@ -1,25 +1,47 @@
 // ShaGa IPTV Player for Android — Nav.kt
 // Main screen logic: left column rows, the cursor in both columns, full screen, channel
-// switching, Back by steps (SPEC.md, sections 2 and 3). No Android code here: the remote
-// and the touch screen both come as simple calls, the screen is redrawn through NavHost.
+// switching, Back by steps, marks of what is playing (SPEC.md, sections 2 and 3). No Android
+// code here: the remote and the touch screen come as simple calls, the screen is redrawn
+// through NavHost.
 // Логика главного экрана: строки левой колонки, курсор в обеих колонках, полный экран,
-// переключение каналов, Back по шагам (SPEC.md, разделы 2 и 3). Кода Android здесь нет:
-// пульт и сенсорный экран приходят простыми вызовами, экран перерисовывается через NavHost.
+// переключение каналов, Back по шагам, отметки того, что играет (SPEC.md, разделы 2 и 3).
+// Кода Android здесь нет: пульт и сенсорный экран приходят простыми вызовами, экран
+// перерисовывается через NavHost.
 package com.shaga.player
 
-// A category of the left column: search results, favourites, "All channels" or a playlist group.
-// id stays the same when the rows are rebuilt (language, favourites, search), so the cursor
-// can be put back: "__search", "__fav", "__all", "g:<group name>".
-// Категория левой колонки: результаты поиска, избранное, «Все каналы» или группа плейлиста.
-// id не меняется при пересборке строк (язык, избранное, поиск), чтобы вернуть курсор на место:
-// "__search", "__fav", "__all", "g:<название группы>".
-class Category(val id: String, val title: String, val channels: List<Channel>)
+// A category of the left column. id stays the same when the rows are rebuilt (language,
+// favourites, search, group modes), so the cursor can be put back:
+// "__search", "__fav", "__all", "g:<group name>".
+// group = the playlist group name (only for "g:" categories); locked = "Name [PIN]" without
+// a counter; channels of a locked group are empty until the PIN is entered.
+// Категория левой колонки. id не меняется при пересборке строк (язык, избранное, поиск,
+// режимы групп), чтобы вернуть курсор на место: "__search", "__fav", "__all", "g:<группа>".
+// group = название группы плейлиста (только у «g:»); locked = «Название [PIN]» без счётчика;
+// каналы закрытой группы пусты, пока не введён PIN.
+class Category(
+    val id: String,
+    val title: String,
+    val channels: List<Channel>,
+    val group: String? = null,
+    val locked: Boolean = false
+)
 
-enum class RowKind { SEARCH, LINK, LANGUAGE, SETTINGS, CATEGORY }
+enum class RowKind { SEARCH, PLAYLISTS, LANGUAGE, SETTINGS, CATEGORY }
 
 // A row of the left column: a service row ("> ...") or a category.
 // Строка левой колонки: служебная («> ...») или категория.
 class LeftRow(val kind: RowKind, val title: String, val category: Category?)
+
+// The same channel in a new copy of the playlist (after an update the objects are new).
+// Тот же канал в новой копии плейлиста (после обновления объекты новые).
+fun sameChannel(a: Channel?, b: Channel?): Boolean =
+    a != null && b != null && (a === b || (a.name == b.name && a.group == b.group))
+
+fun List<Channel>.indexOfChannel(ch: Channel?): Int {
+    if (ch == null) return -1
+    val i = indexOf(ch)
+    return if (i >= 0) i else indexOfFirst { sameChannel(it, ch) }
+}
 
 object Catalog {
     const val SEARCH = "__search"
@@ -29,10 +51,11 @@ object Catalog {
     fun groupId(group: String): String = "g:$group"
 
     // The left column (SPEC.md, section 2): service rows; then "Search: ..." (if there was a
-    // search), "Favourites", "All channels" and the groups in the order of the playlist.
-    // t gives a UI string by its key.
+    // search), "Favourites", "All channels" and the groups that are not hidden, in the order
+    // of the playlist. Protection rules come from Protection; t gives a UI string by its key.
     // Левая колонка (SPEC.md, раздел 2): служебные строки; затем «Поиск: ...» (если был поиск),
-    // «Избранное», «Все каналы» и группы в порядке плейлиста. t даёт строку интерфейса по ключу.
+    // «Избранное», «Все каналы» и нескрытые группы в порядке плейлиста. Правила защиты — из
+    // Protection; t даёт строку интерфейса по ключу.
     fun rows(
         pl: Playlist?, favorites: Collection<String>,
         searchQuery: String, searchResult: List<Channel>?,
@@ -40,19 +63,40 @@ object Catalog {
     ): List<LeftRow> {
         val out = ArrayList<LeftRow>()
         out.add(LeftRow(RowKind.SEARCH, t("svcSearch"), null))
-        out.add(LeftRow(RowKind.LINK, t("editLink"), null))
+        out.add(LeftRow(RowKind.PLAYLISTS, t("svcPlaylists"), null))
         out.add(LeftRow(RowKind.LANGUAGE, t("svcLanguage"), null))
         out.add(LeftRow(RowKind.SETTINGS, t("svcSettings"), null))
         if (pl == null || pl.channels.isEmpty()) return out
 
         fun add(c: Category) = out.add(LeftRow(RowKind.CATEGORY, c.title, c))
-        if (searchResult != null) add(Category(SEARCH, t("searchPrefix") + " " + searchQuery, searchResult))
+        if (searchResult != null) {
+            add(Category(SEARCH, t("searchPrefix") + " " + searchQuery, searchResult.filter { Protection.general(it.group) }))
+        }
         val favSet = favorites.toHashSet()
-        add(Category(FAV, t("favorites"), pl.channels.filter { it.name in favSet }))
-        add(Category(ALL, t("allChannels"), pl.channels))
+        add(Category(FAV, t("favorites"), pl.channels.filter { it.name in favSet && Protection.general(it.group) }))
+        add(Category(ALL, t("allChannels"), pl.channels.filter { Protection.general(it.group) }))
+        for ((group, list) in groupsOf(pl)) {
+            if (Protection.isHidden(group)) continue
+            val locked = Protection.isLocked(group)
+            val title = group.ifEmpty { t("noGroup") }
+            add(Category(groupId(group), title, if (Protection.isOpen(group)) list else emptyList(), group, locked))
+        }
+        return out
+    }
+
+    // Groups in the order they appear in the playlist / Группы в порядке появления в плейлисте
+    fun groupsOf(pl: Playlist): Map<String, List<Channel>> {
         val byGroup = LinkedHashMap<String, ArrayList<Channel>>()
         for (ch in pl.channels) byGroup.getOrPut(ch.group) { ArrayList() }.add(ch)
-        for ((group, list) in byGroup) add(Category(groupId(group), group.ifEmpty { t("noGroup") }, list))
+        return byGroup
+    }
+
+    // Names of channels of groups with the 18+ mark: they must not stay in the favourites.
+    // Названия каналов групп с отметкой 18+: в избранном их быть не должно.
+    fun adultNames(pl: Playlist?): Set<String> {
+        if (pl == null) return emptySet()
+        val out = HashSet<String>()
+        for (ch in pl.channels) if (Protection.isAdult(ch.group)) out.add(ch.name)
         return out
     }
 }
@@ -67,12 +111,14 @@ interface NavHost {
     fun startChannel(ch: Channel)
     fun stopChannel()
     fun openSearch()
-    fun openLinkDialog()
+    fun openPlaylists()
     fun openLanguage()
     fun openSettings()
     fun openExitDialog()
+    fun openLockedGroup(cat: Category)  // OK on "Name [PIN]" / OK на «Название [PIN]»
     // ownGroup = the list of the channel's own group is open / открыт список группы самого канала
     fun openChannelMenu(ch: Channel, ownGroup: Boolean)
+    fun openGroupMenu(cat: Category)
 }
 
 class Nav(private val host: NavHost, startInKeyMode: Boolean) {
@@ -84,15 +130,15 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
         private set
     var shown: Category? = null         // whose channels the middle column shows / чьи каналы в средней колонке
         private set
-    var column = Pane.GROUPS          // the column with the cursor / колонка, в которой курсор
+    var column = Pane.GROUPS            // the column with the cursor / колонка, в которой курсор
         private set
     var fullscreen = false
         private set
 
     var playing: Channel? = null
         private set
-    var playCat: Category? = null       // channels are switched inside it / внутри неё переключаются каналы
-        private set
+    var playCat: Category? = null       // started from it; channels are switched inside it
+        private set                     // запущен из неё; внутри неё переключаются каналы
     var playPos = -1
         private set
     var infoTick = 0                    // grows when the channel bar must appear / растёт, когда надо показать плашку
@@ -116,11 +162,13 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
     private fun rowOf(cat: Category?): Int = if (cat == null) -1 else rows.indexOfFirst { it.category === cat }
 
     // reset = true: a new playlist, everything starts from "All channels".
-    // reset = false: the same playlist with new rows (language, favourites, search): the cursor,
-    // the open category and the playing channel stay where they were, as far as possible.
+    // reset = false: the same playlist with new rows (language, favourites, search, modes, an
+    // updated copy of the playlist): the cursor, the open category and the playing channel stay
+    // where they were, as far as possible.
     // reset = true: новый плейлист, всё начинается со «Всех каналов».
-    // reset = false: тот же плейлист с новыми строками (язык, избранное, поиск): курсор, открытая
-    // категория и играющий канал остаются на местах, насколько это возможно.
+    // reset = false: тот же плейлист с новыми строками (язык, избранное, поиск, режимы, свежая
+    // копия плейлиста): курсор, открытая категория и играющий канал остаются на местах,
+    // насколько это возможно.
     fun setRows(newRows: List<LeftRow>, reset: Boolean) {
         val oldRow = rows.getOrNull(groupSel)
         val oldShownId = shown?.id
@@ -132,11 +180,12 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
             playing = null; playCat = null; playPos = -1; playFailed = false; fullscreen = false
             val all = categoryById(Catalog.ALL)
             if (all != null) {
-                shown = all; groupSel = rowOf(all); chanSel = 0; column = Pane.CHANNELS
+                shown = all; groupSel = rowOf(all); chanSel = 0
+                column = if (all.channels.isEmpty()) Pane.GROUPS else Pane.CHANNELS
             } else {
-                // No channels: the cursor is on the link row / Каналов нет: курсор на строке ссылки
+                // No channels: the cursor is on "> Playlists" / Каналов нет: курсор на «> Плейлисты»
                 shown = null; chanSel = 0; column = Pane.GROUPS
-                groupSel = maxOf(0, rows.indexOfFirst { it.kind == RowKind.LINK })
+                groupSel = maxOf(0, rows.indexOfFirst { it.kind == RowKind.PLAYLISTS })
             }
             host.navChanged()
             return
@@ -146,7 +195,7 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
         val cat = categoryById(oldShownId) ?: categoryById(Catalog.ALL)
         shown = cat
         val n = cat?.channels?.size ?: 0
-        val keep = if (cat != null && oldChannel != null) cat.channels.indexOf(oldChannel) else -1
+        val keep = cat?.channels?.indexOfChannel(oldChannel) ?: -1
         chanSel = if (keep >= 0) keep else chanSel.coerceIn(0, maxOf(0, n - 1))
         if (n == 0) column = Pane.GROUPS
 
@@ -157,35 +206,41 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
             row = if (id != null) rows.indexOfFirst { it.category?.id == id }
             else rows.indexOfFirst { it.kind == oldRow.kind }
         }
-        if (row < 0) row = rowOf(cat)
-        if (column == Pane.CHANNELS) row = rowOf(cat)
+        if (row < 0 || column == Pane.CHANNELS) row = rowOf(cat)
         groupSel = if (row >= 0) row else 0
 
-        // The playing channel / Играющий канал
+        // The playing channel: the same category if it still has it, else "All channels".
+        // Играющий канал: та же категория, если он в ней остался, иначе «Все каналы».
         val p = playing
         if (p != null) {
             var pc = categoryById(oldPlayId)
-            var pos = pc?.channels?.indexOf(p) ?: -1
+            var pos = pc?.channels?.indexOfChannel(p) ?: -1
             if (pos < 0) {
                 pc = categoryById(Catalog.ALL)
-                pos = pc?.channels?.indexOf(p) ?: -1
+                pos = pc?.channels?.indexOfChannel(p) ?: -1
             }
-            playCat = if (pos >= 0) pc else null
+            if (pos >= 0 && pc != null) {
+                playing = pc.channels[pos]
+                playCat = pc
+            } else {
+                playCat = null
+            }
             playPos = pos
         }
         host.navChanged()
     }
 
-    // Opens a category with the cursor in its channels (search results, the group of a channel).
-    // Открывает категорию с курсором в её каналах (результаты поиска, группа канала).
+    // Opens a category with the cursor in its channels (search results, the group of a channel,
+    // a group after its PIN).
+    // Открывает категорию с курсором в её каналах (результаты поиска, группа канала, группа
+    // после PIN-кода).
     fun openCategory(id: String, onChannel: Channel?) {
         val cat = categoryById(id) ?: return
-        if (cat.channels.isEmpty()) return
         shown = cat
         groupSel = maxOf(0, rowOf(cat))
-        val pos = if (onChannel != null) cat.channels.indexOf(onChannel) else -1
+        val pos = cat.channels.indexOfChannel(onChannel)
         chanSel = if (pos >= 0) pos else 0
-        column = Pane.CHANNELS
+        column = if (cat.channels.isEmpty()) Pane.GROUPS else Pane.CHANNELS
         host.navChanged()
     }
 
@@ -195,11 +250,34 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
         val all = categoryById(Catalog.ALL) ?: return false
         val pos = all.channels.indexOfFirst { it.n == n }
         if (pos < 0) return false
-        start(all, pos)
+        playInFull(all, pos)
+        return true
+    }
+
+    // The last channel at start: in the category it was started from, else in "All channels".
+    // Последний канал при запуске: в категории, из которой его включали, иначе во «Всех каналах».
+    fun autoStart(catId: String, name: String, group: String): Boolean {
+        val probe = Channel(0, name, group, "", "", "", "", "", "")
+        for (id in listOf(catId, Catalog.ALL)) {
+            val cat = categoryById(id) ?: continue
+            val pos = cat.channels.indexOfChannel(probe)
+            if (pos >= 0) {
+                playInFull(cat, pos)
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun playInFull(cat: Category, pos: Int) {
+        shown = cat
+        groupSel = maxOf(0, rowOf(cat))
+        chanSel = pos
+        column = Pane.CHANNELS
+        start(cat, pos)
         fullscreen = true
         infoTick++
         host.navChanged()
-        return true
     }
 
     // ---------- remote / пульт ----------
@@ -220,7 +298,7 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
             NavKey.DOWN -> move(1, repeat)
             NavKey.PAGE_UP, NavKey.CH_UP -> page(-1)
             NavKey.PAGE_DOWN, NavKey.CH_DOWN -> page(1)
-            NavKey.LEFT -> if (column == Pane.CHANNELS) column = Pane.GROUPS
+            NavKey.LEFT -> if (column == Pane.CHANNELS) toGroups()
             NavKey.RIGHT -> if (column == Pane.GROUPS) enterChannels()
             NavKey.OK -> if (!repeat) ok()
         }
@@ -231,7 +309,7 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
         when (k) {
             NavKey.UP, NavKey.CH_UP -> step(if (zapInvert) -1 else 1)
             NavKey.DOWN, NavKey.CH_DOWN -> step(if (zapInvert) 1 else -1)
-            NavKey.OK -> if (playFailed) restart() else infoTick++
+            NavKey.OK -> if (playFailed) restart() else fold()
             else -> {}
         }
     }
@@ -261,16 +339,26 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
         }
     }
 
-    // The cursor came to a row of the left column: a category shows its channels at once.
-    // Курсор пришёл на строку левой колонки: категория сразу показывает свои каналы.
+    // The cursor came to a row of the left column: a category shows its channels at once,
+    // the cursor of the channels stands on the playing channel if it is there.
+    // Курсор пришёл на строку левой колонки: категория сразу показывает свои каналы, курсор
+    // каналов стоит на играющем канале, если он там есть.
     private fun selectGroup(i: Int) {
         groupSel = i
         val cat = rows[i].category ?: return
         if (cat === shown) return
         shown = cat
-        val p = playing
-        val pos = if (p != null) cat.channels.indexOf(p) else -1
+        val pos = cat.channels.indexOfChannel(playing)
         chanSel = if (pos >= 0) pos else 0
+    }
+
+    // 1.4.1: leaving the channels for the groups puts the channel cursor back on the playing row.
+    // 1.4.1: при уходе из каналов в группы курсор каналов возвращается на играющую строку.
+    private fun toGroups() {
+        column = Pane.GROUPS
+        val cat = shown ?: return
+        val pos = cat.channels.indexOfChannel(playing)
+        if (pos >= 0) chanSel = pos
     }
 
     private fun enterChannels() {
@@ -286,10 +374,13 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
         }
         when (rows.getOrNull(groupSel)?.kind) {
             RowKind.SEARCH -> host.openSearch()
-            RowKind.LINK -> host.openLinkDialog()
+            RowKind.PLAYLISTS -> host.openPlaylists()
             RowKind.LANGUAGE -> host.openLanguage()
             RowKind.SETTINGS -> host.openSettings()
-            RowKind.CATEGORY -> enterChannels()
+            RowKind.CATEGORY -> {
+                val cat = rows[groupSel].category
+                if (cat != null && cat.locked && cat.channels.isEmpty()) host.openLockedGroup(cat) else enterChannels()
+            }
             null -> {}
         }
     }
@@ -299,7 +390,7 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
     private fun activateChannel() {
         val cat = shown ?: return
         val ch = cat.channels.getOrNull(chanSel) ?: return
-        if (playing === ch && !playFailed) {
+        if (sameChannel(playing, ch) && !playFailed) {
             playCat = cat; playPos = chanSel
             fullscreen = true
             infoTick++
@@ -332,11 +423,27 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
         if (shown === cat) chanSel = pos
     }
 
-    // Long OK: the context menu of the place. 0.3.0: only for a channel in the list.
-    // Долгое OK: контекстное меню места. 0.3.0: только для канала в списке.
+    // 1.4.1: OK in full screen folds the video back to the lists; the cursor goes to the row it
+    // was started from (after switching — the playing channel). The video goes on.
+    // 1.4.1: OK на полном экране сворачивает видео к спискам; курсор — на строку, с которой
+    // запускали (после переключения — на играющий канал). Видео продолжается.
+    private fun fold() {
+        fullscreen = false
+        column = Pane.CHANNELS
+        val cat = playCat ?: return
+        shown = cat
+        chanSel = playPos.coerceIn(0, maxOf(0, cat.channels.size - 1))
+        val row = rowOf(cat)
+        if (row >= 0) groupSel = row
+    }
+
+    // Long OK: the context menu of the place: a channel or a group of the playlist.
+    // Долгое OK: контекстное меню места: канал или группа плейлиста.
     fun longOk() {
         keyMode = true
-        if (!fullscreen && column == Pane.CHANNELS) channelMenu()
+        if (!fullscreen) {
+            if (column == Pane.CHANNELS) channelMenu() else groupMenu()
+        }
         host.navChanged()
     }
 
@@ -344,6 +451,11 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
         val cat = shown ?: return
         val ch = cat.channels.getOrNull(chanSel) ?: return
         host.openChannelMenu(ch, cat.id == Catalog.groupId(ch.group))
+    }
+
+    private fun groupMenu() {
+        val cat = rows.getOrNull(groupSel)?.category ?: return
+        if (cat.group != null) host.openGroupMenu(cat)
     }
 
     // A swipe over the video in full screen (phone): +1 = next channel of the list, -1 = previous.
@@ -359,20 +471,9 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
     // full screen -> channels -> groups -> stop the video -> exit window
     // полный экран -> каналы -> группы -> остановить видео -> окно выхода
     fun back() {
-
         when {
-            fullscreen -> {
-                fullscreen = false
-                column = Pane.CHANNELS
-                val cat = playCat
-                if (cat != null) {
-                    shown = cat
-                    chanSel = playPos.coerceIn(0, maxOf(0, cat.channels.size - 1))
-                    val row = rows.indexOfFirst { it.category === cat }
-                    if (row >= 0) groupSel = row
-                }
-            }
-            column == Pane.CHANNELS -> column = Pane.GROUPS
+            fullscreen -> fold()
+            column == Pane.CHANNELS -> toGroups()
             playing != null -> clearPlayback()
             else -> {
                 host.openExitDialog()
@@ -387,22 +488,13 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
         host.stopChannel()
     }
 
-    // The app goes to the background or changes the playlist: the stream stops.
-    // Приложение уходит в фон или меняет плейлист: поток останавливается.
+    // The app goes to the background, the playlist changes, the group of the playing channel was
+    // closed: the stream stops, the cursor stays on the channel that was playing.
+    // Приложение уходит в фон, меняется плейлист, группу играющего канала закрыли: поток
+    // останавливается, курсор остаётся на канале, который играл.
     fun stopPlayback() {
         if (playing == null && !fullscreen) return
-        if (fullscreen) {
-            // leave the cursor on the channel that was playing / курсор остаётся на игравшем канале
-            fullscreen = false
-            column = Pane.CHANNELS
-            val cat = playCat
-            if (cat != null) {
-                shown = cat
-                chanSel = playPos.coerceIn(0, maxOf(0, cat.channels.size - 1))
-                val row = rows.indexOfFirst { it.category === cat }
-                if (row >= 0) groupSel = row
-            }
-        }
+        if (fullscreen) fold()
         clearPlayback()
         host.navChanged()
     }
@@ -415,6 +507,16 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
         column = Pane.GROUPS
         selectGroup(i)
         ok()
+        host.navChanged()
+    }
+
+    // Touch and hold: the context menu of a group / Долгое нажатие: контекстное меню группы
+    fun holdGroup(i: Int) {
+        if (i !in rows.indices) return
+        keyMode = false
+        column = Pane.GROUPS
+        selectGroup(i)
+        groupMenu()
         host.navChanged()
     }
 
@@ -439,8 +541,10 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
         host.navChanged()
     }
 
-    // A tap on the video: from the list to full screen; in full screen it shows the channel bar.
-    // Нажатие на видео: из списка на полный экран; на полном экране показывает плашку.
+    // A tap on the video: from the list to full screen; in full screen it folds back
+    // (or retries a channel that did not start).
+    // Нажатие на видео: из списка на полный экран; на полном экране сворачивает обратно
+    // (или повторяет запуск канала, который не запустился).
     fun tapVideo() {
         if (playing == null) return
         keyMode = false
@@ -450,7 +554,7 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
         } else if (playFailed) {
             restart()
         } else {
-            infoTick++
+            fold()
         }
         host.navChanged()
     }

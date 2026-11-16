@@ -1,9 +1,11 @@
 // ShaGa IPTV Player for Android — Ui.kt
 // Screens: welcome, loading, main screen (groups, channels, info; video under the list),
-// full screen. The screen only draws what Nav holds and reports taps; the remote is handled
+// full screen, Settings pages, our own windows (menu, PIN pad), the "busy" sign.
+// The screen only draws what Nav and the windows hold and reports taps; the remote is handled
 // in MainActivity, so nothing here needs the input focus.
 // Экраны: приветствие, загрузка, главный экран (группы, каналы, сведения; видео под списком),
-// полный экран. Экран только рисует то, что хранит Nav, и сообщает о нажатиях пальцем; пульт
+// полный экран, страницы Настроек, свои окна (меню, клавиатура PIN), знак «занят».
+// Экран только рисует то, что хранят Nav и окна, и сообщает о нажатиях пальцем; пульт
 // обрабатывается в MainActivity, поэтому фокус ввода здесь нигде не нужен.
 package com.shaga.player
 
@@ -21,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
@@ -48,6 +51,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -71,7 +75,9 @@ object Ui {
     val Error = Color(0xFFF28B7C)
     val Shade = Color(0xCC141C2E)     // list over the video / список поверх видео
     val Veil = Color(0x66141C2E)      // info column over the video / колонка сведений поверх видео
-    val Mark = Color(0x55F5B83D)      // row under the cursor of the other column / строка под курсором другой колонки
+    val Dim = Color(0x99000000)       // under our windows / под нашими окнами
+    val PlayOn = Color(0x55F5B83D)    // playing row, column with the cursor / играющая строка, колонка с курсором
+    val PlayOff = Color(0x3DFFFFFF)   // playing row, other column / играющая строка, другая колонка
 }
 
 enum class Screen { WELCOME, LOADING, MAIN }
@@ -79,48 +85,84 @@ enum class Screen { WELCOME, LOADING, MAIN }
 // What the screens show besides Nav. Changed only by MainActivity.
 // Что экраны показывают помимо Nav. Меняет только MainActivity.
 class UiState {
-    var tick by mutableStateOf(0)           // grows on every change in Nav / растёт при каждом изменении в Nav
+    var tick by mutableStateOf(0)           // grows on every change of Nav or a window / растёт при каждом изменении
     var screen by mutableStateOf(Screen.LOADING)
     var playlistName by mutableStateOf("")
+    var stale by mutableStateOf(false)      // a saved copy, the update failed / сохранённая копия, обновить не удалось
     var listError by mutableStateOf("")
     var playState by mutableStateOf(PlayState.IDLE)
     var lang by mutableStateOf("en")        // a new language redraws everything / новый язык перерисовывает всё
     var numBuf by mutableStateOf("")        // channel number being typed / набираемый номер канала
+    var busy by mutableStateOf("")          // "loading..." over the screen / «загрузка...» поверх экрана
+    var popup by mutableStateOf<Popup?>(null)
+    var pin by mutableStateOf<PinPad?>(null)
+    var settings by mutableStateOf<SettingsPage?>(null)
     var isTv = false
 }
 
+// What the windows report back / О чём сообщают окна
+class UiActions(
+    val onWelcome: () -> Unit,
+    val onPopupTap: (Int) -> Unit,
+    val onPopupOutside: () -> Unit,
+    val onPinTap: (Int) -> Unit,
+    val onPinOutside: () -> Unit,
+    val onSettingsTap: (Int) -> Unit,
+    val onSettingsBack: () -> Unit
+)
+
 @Composable
-fun AppRoot(ui: UiState, nav: Nav, exo: Player, onWelcome: () -> Unit) {
+fun AppRoot(ui: UiState, nav: Nav, exo: Player, act: UiActions) {
     BoxWithConstraints(Modifier.fillMaxSize().background(Ui.Bg)) {
         // Wide screen (TV, tablet): three columns. Narrow (phone): one column at a time.
         // Широкий экран (ТВ, планшет): три колонки. Узкий (телефон): по одной колонке.
         val wide = maxWidth >= 840.dp
         val portrait = maxHeight > maxWidth
         val screenWidth = maxWidth
-        // key(language): after a language change the whole screen is built again, so that
-        // every text is taken in the new language.
-        // key(язык): после смены языка экран строится заново, чтобы все тексты взялись
-        // на новом языке.
+        // Reading tick redraws the windows after a change inside them.
+        // Чтение tick перерисовывает окна после изменения внутри них.
+        val tick = ui.tick
+        // key(language): after a language change the whole screen is built again.
+        // key(язык): после смены языка экран строится заново.
         key(ui.lang) {
             when (ui.screen) {
-                Screen.WELCOME -> WelcomeScreen(ui.isTv, onWelcome)
+                Screen.WELCOME -> WelcomeScreen(ui.isTv, act.onWelcome)
                 Screen.LOADING -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Label(S.t("loading"), color = Ui.Muted, size = 20)
                 }
-                Screen.MAIN -> MainScreen(ui, nav, exo, wide, portrait, screenWidth)
+                Screen.MAIN -> MainScreen(ui, nav, exo, wide, portrait, screenWidth, act)
             }
-        }
-        // Channel number typed with digits / Номер канала, набираемый цифрами
-        val num = ui.numBuf
-        if (num.isNotEmpty()) {
-            Label(
-                num + if (num.length < 4) "_" else "",
-                modifier = Modifier.align(Alignment.TopEnd).safeDrawingPadding()
-                    .padding(top = 27.dp, end = 48.dp)
-                    .background(Ui.Shade, RoundedCornerShape(10.dp))
-                    .padding(horizontal = 22.dp, vertical = 10.dp),
-                color = Ui.Amber, size = 34, bold = true, maxLines = 1
-            )
+
+            // Channel number typed with digits / Номер канала, набираемый цифрами
+            val num = ui.numBuf
+            if (num.isNotEmpty()) {
+                Label(
+                    num + if (num.length < 4) "_" else "",
+                    modifier = Modifier.align(Alignment.TopEnd).safeDrawingPadding()
+                        .padding(top = 27.dp, end = 48.dp)
+                        .background(Ui.Shade, RoundedCornerShape(10.dp))
+                        .padding(horizontal = 22.dp, vertical = 10.dp),
+                    color = Ui.Amber, size = 34, bold = true, maxLines = 1
+                )
+            }
+
+            val popup = ui.popup
+            val pin = ui.pin
+            if (pin != null) {
+                PinWindow(pin, tick, act.onPinTap, act.onPinOutside)
+            } else if (popup != null) {
+                PopupWindow(popup, tick, act.onPopupTap, act.onPopupOutside)
+            }
+            if (ui.busy.isNotEmpty()) {
+                Box(Modifier.fillMaxSize().background(Ui.Dim), contentAlignment = Alignment.Center) {
+                    Label(
+                        ui.busy,
+                        modifier = Modifier.background(Ui.Panel, RoundedCornerShape(12.dp))
+                            .padding(horizontal = 28.dp, vertical = 18.dp),
+                        size = 20
+                    )
+                }
+            }
         }
     }
 }
@@ -135,7 +177,8 @@ fun Label(
     size: Int = 18,
     bold: Boolean = false,
     maxLines: Int = Int.MAX_VALUE,
-    align: TextAlign = TextAlign.Start
+    align: TextAlign = TextAlign.Start,
+    mono: Boolean = false
 ) {
     BasicText(
         text = text,
@@ -144,6 +187,7 @@ fun Label(
             color = color,
             fontSize = size.sp,
             fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
+            fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default,
             textAlign = align
         ),
         overflow = TextOverflow.Ellipsis,
@@ -159,8 +203,14 @@ private fun Modifier.screenEdges(isTv: Boolean): Modifier =
         else Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
     )
 
-// A row of a list: fixed height, background by state, reacts to a tap.
-// Строка списка: постоянная высота, фон по состоянию, реагирует на нажатие пальцем.
+private fun Modifier.taps(key: Any?, onTap: () -> Unit, onHold: (() -> Unit)? = null): Modifier =
+    this.pointerInput(key) {
+        if (onHold == null) detectTapGestures(onTap = { onTap() })
+        else detectTapGestures(onTap = { onTap() }, onLongPress = { onHold() })
+    }
+
+// A row of a list: fixed height, background by state, reacts to a tap and a long tap.
+// Строка списка: постоянная высота, фон по состоянию, реагирует на нажатие и долгое нажатие.
 @Composable
 private fun ListRow(
     index: Int, height: Dp, background: Color,
@@ -198,7 +248,6 @@ private fun KeepVisible(listState: LazyListState, sel: Int, rowPx: Int, key: Any
         val viewport = listState.layoutInfo.viewportSize.height
         if (viewport <= 0 || rowPx <= 0) return@LaunchedEffect      // not measured yet / ещё не измерен
         val perPage = maxOf(1, viewport / rowPx)
-        onPerPage(perPage)
         val top = listState.firstVisibleItemIndex
         val shifted = listState.firstVisibleItemScrollOffset > 0
         if (sel < top || (sel == top && shifted)) {
@@ -226,6 +275,21 @@ private fun Logo(url: String, width: Dp, height: Dp) {
     }
 }
 
+// Background and text colour of a list row (SPEC 1.4.1, "where it plays"):
+// the cursor = amber; the playing row = soft amber in the column with the cursor, greyish in
+// the other column; the selected row of the other column = amber text.
+// Фон и цвет текста строки списка (SPEC 1.4.1, «где играет»): курсор — янтарный; играющая
+// строка — мягкий янтарный в колонке с курсором, сероватый в другой колонке; выделенная
+// строка другой колонки — янтарный текст.
+private class RowLook(val bg: Color, val fg: Color)
+
+private fun rowLook(onCursor: Boolean, isPlaying: Boolean, focusedColumn: Boolean, selectedHere: Boolean): RowLook = when {
+    onCursor -> RowLook(Ui.Amber, Ui.Ink)
+    isPlaying -> RowLook(if (focusedColumn) Ui.PlayOn else Ui.PlayOff, if (selectedHere) Ui.Amber else Ui.Text)
+    selectedHere -> RowLook(Color.Transparent, Ui.Amber)
+    else -> RowLook(Color.Transparent, Ui.Text)
+}
+
 // ---------- welcome / приветствие ----------
 
 @Composable
@@ -249,7 +313,7 @@ private fun WelcomeScreen(isTv: Boolean, onAdd: () -> Unit) {
             S.t("welcomeBtn"),
             modifier = Modifier
                 .background(Ui.Amber, RoundedCornerShape(8.dp))
-                .pointerInput(Unit) { detectTapGestures(onTap = { add() }) }
+                .taps(Unit, { add() })
                 .padding(horizontal = 22.dp, vertical = 12.dp),
             color = Ui.Ink, size = 18, bold = true
         )
@@ -261,7 +325,7 @@ private fun WelcomeScreen(isTv: Boolean, onAdd: () -> Unit) {
 @Composable
 private fun MainScreen(
     ui: UiState, nav: Nav, exo: Player,
-    wide: Boolean, portrait: Boolean, screenWidth: Dp
+    wide: Boolean, portrait: Boolean, screenWidth: Dp, act: UiActions
 ) {
     // Nav is plain Kotlin and cannot tell the screen about its changes. MainActivity grows
     // ui.tick on every change; reading it here makes this function run again and re-read Nav.
@@ -271,7 +335,8 @@ private fun MainScreen(
     val tick = ui.tick
     if (tick < 0) return
     val playing = nav.playing
-    val full = nav.fullscreen && playing != null
+    val settings = ui.settings
+    val full = nav.fullscreen && playing != null && settings == null
     // Phone held upright: the video is a box at the top, the list is under it.
     // Otherwise the video takes the whole screen and the list lies over it.
     // Телефон вертикально: видео — прямоугольник вверху, список под ним.
@@ -280,7 +345,13 @@ private fun MainScreen(
     val videoHeight = screenWidth * 9f / 16f
     val shown = nav.shown
     val channels = shown?.channels ?: emptyList()
-    val emptyText = if (shown?.id == Catalog.FAV) S.t("emptyFav") else ""
+    val emptyText = when {
+        shown == null -> ""
+        shown.locked && channels.isEmpty() -> S.t("lockedHint")
+        shown.id == Catalog.FAV && channels.isEmpty() -> S.t("emptyFav")
+        channels.isEmpty() -> S.t("emptyGroup")
+        else -> ""
+    }
 
     Box(Modifier.fillMaxSize()) {
         if (playing != null) {
@@ -310,20 +381,18 @@ private fun MainScreen(
             ) {
                 TopLine(ui, playing)
                 Spacer(Modifier.height(8.dp))
-                if (wide) {
+                if (settings != null) {
+                    SettingsPanel(Modifier.fillMaxWidth().weight(1f), settings, ui.isTv, act)
+                } else if (wide) {
                     Row(Modifier.fillMaxWidth().weight(1f)) {
                         GroupsColumn(
-                            Modifier.weight(0.27f).fillMaxHeight(), nav.rows, nav.groupSel,
-                            cursor = nav.keyMode && nav.column == Pane.GROUPS, shown = shown,
-                            onTap = { nav.tapGroup(it) }, onPerPage = { nav.groupsPerPage = it }
+                            Modifier.weight(0.27f).fillMaxHeight(), nav,
+                            onTap = { nav.tapGroup(it) }, onHold = { nav.holdGroup(it) }
                         )
                         Spacer(Modifier.width(10.dp))
                         ChannelsColumn(
-                            Modifier.weight(0.40f).fillMaxHeight(), channels, nav.chanSel,
-                            cursor = nav.keyMode && nav.column == Pane.CHANNELS, playing = playing,
-                            backTitle = "", onBack = { nav.back() }, emptyText = emptyText,
-                            onTap = { nav.tapChannel(it) }, onHold = { nav.holdChannel(it) },
-                            onPerPage = { nav.channelsPerPage = it }
+                            Modifier.weight(0.40f).fillMaxHeight(), nav, channels,
+                            backTitle = "", emptyText = emptyText
                         )
                         Spacer(Modifier.width(10.dp))
                         InfoColumn(
@@ -334,17 +403,13 @@ private fun MainScreen(
                     }
                 } else if (nav.column == Pane.GROUPS) {
                     GroupsColumn(
-                        Modifier.fillMaxWidth().weight(1f), nav.rows, nav.groupSel,
-                        cursor = nav.keyMode, shown = shown,
-                        onTap = { nav.tapGroup(it) }, onPerPage = { nav.groupsPerPage = it }
+                        Modifier.fillMaxWidth().weight(1f), nav,
+                        onTap = { nav.tapGroup(it) }, onHold = { nav.holdGroup(it) }
                     )
                 } else {
                     ChannelsColumn(
-                        Modifier.fillMaxWidth().weight(1f), channels, nav.chanSel,
-                        cursor = nav.keyMode, playing = playing,
-                        backTitle = shown?.title ?: "", onBack = { nav.back() }, emptyText = emptyText,
-                        onTap = { nav.tapChannel(it) }, onHold = { nav.holdChannel(it) },
-                        onPerPage = { nav.channelsPerPage = it }
+                        Modifier.fillMaxWidth().weight(1f), nav, channels,
+                        backTitle = shown?.title ?: "", emptyText = emptyText
                     )
                 }
             }
@@ -359,7 +424,8 @@ private fun TopLine(ui: UiState, playing: Channel?) {
     if (playing != null) {
         Label(S.t("watching") + " " + playing.name, size = 18, bold = true, maxLines = 1)
     } else {
-        val name = if (ui.playlistName.isEmpty()) "" else "  ·  " + ui.playlistName
+        var name = if (ui.playlistName.isEmpty()) "" else "  ·  " + ui.playlistName
+        if (ui.stale) name += " " + S.t("staleShort")
         Label(Config.APP_NAME + " v" + BuildConfig.VERSION_NAME + name, color = Ui.Muted, size = 15, maxLines = 1)
     }
     if (ui.listError.isNotEmpty()) {
@@ -370,32 +436,34 @@ private fun TopLine(ui: UiState, playing: Channel?) {
 }
 
 private fun rowText(row: LeftRow): String {
-    val cat = row.category
-    return if (cat == null) "> " + row.title else row.title + " (" + cat.channels.size + ")"
+    val cat = row.category ?: return "> " + row.title
+    return if (cat.locked) cat.title + " [PIN]" else cat.title + " (" + cat.channels.size + ")"
 }
 
 @Composable
-private fun GroupsColumn(
-    modifier: Modifier, rows: List<LeftRow>, sel: Int, cursor: Boolean, shown: Category?,
-    onTap: (Int) -> Unit, onPerPage: (Int) -> Unit
-) {
+private fun GroupsColumn(modifier: Modifier, nav: Nav, onTap: (Int) -> Unit, onHold: (Int) -> Unit) {
+    val rows = nav.rows
+    val sel = nav.groupSel
+    val focused = nav.column == Pane.GROUPS
+    val cursor = nav.keyMode && focused
     val listState = remember(rows) { LazyListState(maxOf(0, sel - 2)) }
     val rowPx = with(LocalDensity.current) { Config.ROW_GROUP_DP.dp.roundToPx() }
-    KeepVisible(listState, sel, rowPx, rows, onPerPage)
+    KeepVisible(listState, sel, rowPx, rows) { nav.groupsPerPage = it }
 
     Column(modifier.background(Ui.Shade, RoundedCornerShape(10.dp)).padding(vertical = 8.dp, horizontal = 4.dp)) {
         // Above the groups: the highlighted group / Над группами: выделенная группа
         ColumnHeader(rows.getOrNull(sel)?.title ?: "")
         LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().weight(1f)) {
             itemsIndexed(rows) { i, row ->
-                val onCursor = cursor && i == sel
-                val marked = !onCursor && (i == sel || (row.category != null && row.category === shown))
-                ListRow(
-                    index = i, height = Config.ROW_GROUP_DP.dp,
-                    background = if (onCursor) Ui.Amber else if (marked) Ui.Mark else Color.Transparent,
-                    onTap = onTap, onHold = {}
-                ) {
-                    Label(rowText(row), color = if (onCursor) Ui.Ink else Ui.Text, size = 18, maxLines = 1)
+                val cat: Category? = row.category
+                val look = rowLook(
+                    onCursor = cursor && i == sel,
+                    isPlaying = cat != null && cat === nav.playCat,
+                    focusedColumn = focused,
+                    selectedHere = i == sel && !cursor
+                )
+                ListRow(index = i, height = Config.ROW_GROUP_DP.dp, background = look.bg, onTap = onTap, onHold = onHold) {
+                    Label(rowText(row), color = look.fg, size = 18, maxLines = 1)
                 }
             }
         }
@@ -403,15 +471,14 @@ private fun GroupsColumn(
 }
 
 @Composable
-private fun ChannelsColumn(
-    modifier: Modifier, channels: List<Channel>, sel: Int, cursor: Boolean, playing: Channel?,
-    backTitle: String, onBack: () -> Unit, emptyText: String,
-    onTap: (Int) -> Unit, onHold: (Int) -> Unit, onPerPage: (Int) -> Unit
-) {
+private fun ChannelsColumn(modifier: Modifier, nav: Nav, channels: List<Channel>, backTitle: String, emptyText: String) {
+    val sel = nav.chanSel
+    val focused = nav.column == Pane.CHANNELS
+    val cursor = nav.keyMode && focused
+    val playing = nav.playing
     val listState = remember(channels) { LazyListState(maxOf(0, sel - 2)) }
     val rowPx = with(LocalDensity.current) { Config.ROW_CHANNEL_DP.dp.roundToPx() }
-    KeepVisible(listState, sel, rowPx, channels, onPerPage)
-    val back by rememberUpdatedState(onBack)
+    KeepVisible(listState, sel, rowPx, channels) { nav.channelsPerPage = it }
 
     Column(modifier.background(Ui.Shade, RoundedCornerShape(10.dp)).padding(vertical = 8.dp, horizontal = 4.dp)) {
         if (backTitle.isNotEmpty()) {
@@ -419,7 +486,7 @@ private fun ChannelsColumn(
             Label(
                 "< " + backTitle,
                 modifier = Modifier.fillMaxWidth()
-                    .pointerInput(Unit) { detectTapGestures(onTap = { back() }) }
+                    .taps(Unit, { nav.back() })
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 color = Ui.Amber, size = 17, bold = true, maxLines = 1
             )
@@ -427,34 +494,34 @@ private fun ChannelsColumn(
             // Above the channels: the highlighted channel / Над каналами: выделенный канал
             ColumnHeader(channels.getOrNull(sel)?.name ?: "")
         }
-        if (channels.isEmpty() && emptyText.isNotEmpty()) {
+        if (emptyText.isNotEmpty()) {
             Label(emptyText, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), color = Ui.Muted, size = 16)
         }
         LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().weight(1f)) {
             itemsIndexed(channels) { i, ch ->
-                val onCursor = cursor && i == sel
-                val isPlaying = ch === playing
+                val isPlaying = sameChannel(ch, playing)
+                val look = rowLook(
+                    onCursor = cursor && i == sel,
+                    isPlaying = isPlaying,
+                    focusedColumn = focused,
+                    selectedHere = i == sel && !cursor && !focused
+                )
                 ListRow(
-                    index = i, height = Config.ROW_CHANNEL_DP.dp,
-                    background = if (onCursor) Ui.Amber else if (i == sel) Ui.Mark else Color.Transparent,
-                    onTap = onTap, onHold = onHold
+                    index = i, height = Config.ROW_CHANNEL_DP.dp, background = look.bg,
+                    onTap = { nav.tapChannel(it) }, onHold = { nav.holdChannel(it) }
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         // Number: a column for 4 digits, aligned right / Номер: колонка под 4 цифры, вправо
                         Label(
                             ch.n.toString(), modifier = Modifier.width(46.dp),
-                            color = if (onCursor) Ui.Ink else Ui.Muted, size = 15, maxLines = 1, align = TextAlign.End
+                            color = if (look.fg == Ui.Ink) Ui.Ink else Ui.Muted, size = 15, maxLines = 1, align = TextAlign.End
                         )
                         Spacer(Modifier.width(10.dp))
                         Logo(ch.logo, 48.dp, 36.dp)
                         Spacer(Modifier.width(12.dp))
                         // The second line (current programme) comes with the TV guide.
                         // Вторая строка (текущая передача) придёт вместе с программой передач.
-                        Label(
-                            ch.name,
-                            color = if (onCursor) Ui.Ink else if (isPlaying) Ui.Amber else Ui.Text,
-                            size = 18, bold = isPlaying, maxLines = 1
-                        )
+                        Label(ch.name, color = look.fg, size = 18, bold = isPlaying, maxLines = 1)
                     }
                 }
             }
@@ -479,6 +546,137 @@ private fun InfoColumn(modifier: Modifier, channel: Channel?, isPlaying: Boolean
                     Spacer(Modifier.height(12.dp))
                     PlayStatus(playState)
                 }
+            }
+        }
+    }
+}
+
+// ---------- settings / настройки ----------
+
+@Composable
+private fun SettingsPanel(modifier: Modifier, page: SettingsPage, isTv: Boolean, act: UiActions) {
+    val rows = page.rows
+    val sel = page.sel
+    val log = page.page == SetPage.LOG
+    val rowDp = if (log) 30 else Config.ROW_GROUP_DP + 8
+    val listState = remember(page) { LazyListState(maxOf(0, sel - 2)) }
+    val rowPx = with(LocalDensity.current) { rowDp.dp.roundToPx() }
+    KeepVisible(listState, sel, rowPx, page) { page.perPage = it }
+
+    Column(modifier.background(Ui.Shade, RoundedCornerShape(10.dp)).padding(vertical = 10.dp, horizontal = 6.dp)) {
+        Label(
+            (if (isTv) "" else "< ") + page.title,
+            modifier = Modifier.fillMaxWidth().taps(page, act.onSettingsBack).padding(horizontal = 12.dp, vertical = 4.dp),
+            color = Ui.Amber, size = 20, bold = true, maxLines = 1
+        )
+        if (page.sub.isNotEmpty()) {
+            Label(page.sub, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp), color = Ui.Muted, size = 15)
+        }
+        Spacer(Modifier.height(6.dp))
+        LazyColumn(state = listState, modifier = Modifier.fillMaxWidth().weight(1f)) {
+            itemsIndexed(rows) { i, row ->
+                val on = i == sel
+                ListRow(
+                    index = i, height = rowDp.dp,
+                    background = if (on) Ui.Amber else Color.Transparent,
+                    onTap = act.onSettingsTap, onHold = act.onSettingsTap
+                ) {
+                    if (log) {
+                        Label(row.label, color = if (on) Ui.Ink else Ui.Text, size = 13, maxLines = 1, mono = true)
+                    } else {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Label(row.label, modifier = Modifier.weight(1f), color = if (on) Ui.Ink else Ui.Text, size = 18, maxLines = 1)
+                            if (row.value.isNotEmpty()) {
+                                Spacer(Modifier.width(12.dp))
+                                Label(
+                                    row.value, modifier = Modifier.widthIn(max = 520.dp),
+                                    color = if (on) Ui.Ink else Ui.Muted, size = 16, maxLines = 1, align = TextAlign.End
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------- our windows / наши окна ----------
+
+@Composable
+private fun PopupWindow(p: Popup, tick: Int, onTap: (Int) -> Unit, onOutside: () -> Unit) {
+    if (tick < 0) return
+    val rowPx = with(LocalDensity.current) { 46.dp.roundToPx() }
+    val listState = remember(p) { LazyListState(maxOf(0, p.sel - 3)) }
+    KeepVisible(listState, p.sel, rowPx, p) {}
+    Box(Modifier.fillMaxSize().background(Ui.Dim).taps(p, onOutside), contentAlignment = Alignment.Center) {
+        Column(
+            Modifier.widthIn(max = 680.dp).padding(24.dp)
+                .background(Ui.Panel, RoundedCornerShape(14.dp))
+                .taps("inside", {})                       // taps inside do not close / нажатия внутри не закрывают
+                .padding(horizontal = 18.dp, vertical = 16.dp)
+        ) {
+            if (p.title.isNotEmpty()) Label(p.title, size = 21, bold = true, maxLines = 2)
+            if (p.message.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Label(p.message, color = Ui.Muted, size = 16)
+            }
+            Spacer(Modifier.height(12.dp))
+            LazyColumn(state = listState, modifier = Modifier.heightIn(max = 420.dp)) {
+                itemsIndexed(p.items) { i, it ->
+                    val on = i == p.sel
+                    ListRow(index = i, height = 46.dp, background = if (on) Ui.Amber else Color.Transparent, onTap = onTap, onHold = onTap) {
+                        Label((if (it.mark) "* " else "") + it.label, color = if (on) Ui.Ink else Ui.Text, size = 18, maxLines = 1)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PinWindow(p: PinPad, tick: Int, onTap: (Int) -> Unit, onOutside: () -> Unit) {
+    if (tick < 0) return
+    Box(Modifier.fillMaxSize().background(Ui.Dim).taps(p, onOutside), contentAlignment = Alignment.Center) {
+        Column(
+            Modifier.padding(16.dp)
+                .background(Ui.Panel, RoundedCornerShape(14.dp))
+                .taps("inside", {})
+                .padding(horizontal = 22.dp, vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Label(p.title, size = 21, bold = true, maxLines = 1)
+            if (p.message.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Label(
+                    p.message, modifier = Modifier.widthIn(max = 420.dp),
+                    color = if (p.error) Ui.Error else Ui.Muted, size = 16, align = TextAlign.Center
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            // Entered digits are shown as stars / Введённые цифры показаны звёздочками
+            val shownDigits = (0 until 4).joinToString(" ") { if (it < p.digits.length) "*" else "_" }
+            Label(shownDigits, color = Ui.Amber, size = 32, bold = true, mono = true)
+            Spacer(Modifier.height(10.dp))
+            for (r in 0 until 4) {
+                Row {
+                    for (c in 0 until 3) {
+                        val i = r * 3 + c
+                        val on = i == p.sel
+                        Box(
+                            Modifier.padding(4.dp).size(104.dp, 58.dp)
+                                .background(if (on) Ui.Amber else Ui.Bg, RoundedCornerShape(8.dp))
+                                .taps(i, { onTap(i) }),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Label(p.label(i), color = if (on) Ui.Ink else Ui.Text, size = 22, bold = true, maxLines = 1)
+                        }
+                    }
+                }
+            }
+            if (p.hint.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Label(p.hint, color = Ui.Muted, size = 15, align = TextAlign.Center)
             }
         }
     }

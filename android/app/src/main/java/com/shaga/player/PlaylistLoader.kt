@@ -12,11 +12,15 @@ import java.net.URL
 // code: "timeout" | "http" (status = HTTP code) | "network" | "empty"
 class LoadError(val code: String, val status: Int = 0) : Exception(code)
 
+// The text of the file (saved as the copy) and the parsed playlist.
+// Текст файла (сохраняется как копия) и разобранный плейлист.
+class Loaded(val text: String, val playlist: Playlist)
+
 object PlaylistLoader {
 
     // Blocking call: run it off the main thread. Throws LoadError.
     // Блокирующий вызов: запускать не в главном потоке. Бросает LoadError.
-    fun load(url: String): Playlist {
+    fun load(url: String): Loaded {
         val t0 = System.currentTimeMillis()
         val deadline = t0 + Config.LOAD_TIMEOUT_MS
         AppLog.i("LOAD", "playlist: start " + Mask.url(url))
@@ -42,14 +46,22 @@ object PlaylistLoader {
         val t1 = System.currentTimeMillis()
         AppLog.i("LOAD", "playlist: received " + (text.length / 1024) + " KB in " + (t1 - t0) + " ms")
 
-        val pl = M3u.parse(text)
-        AppLog.i("LOAD", "playlist: parsed " + pl.channels.size + " channels, " + pl.groupCount +
-            " groups in " + (System.currentTimeMillis() - t1) + " ms; EPG: " +
-            (if (pl.epgUrl.isEmpty()) "none" else Mask.url(pl.epgUrl.substringBefore(','))))
+        val pl = parse(text, "parsed")
         if (pl.channels.isEmpty()) {
             AppLog.w("LOAD", "playlist: no channels, file starts with: " + text.take(120).replace('\n', ' '))
             throw LoadError("empty")
         }
+        return Loaded(text, pl)
+    }
+
+    // Parsing with a line in the log (also for the saved copy).
+    // Разбор со строкой в журнале (и для сохранённой копии).
+    fun parse(text: String, what: String): Playlist {
+        val t1 = System.currentTimeMillis()
+        val pl = M3u.parse(text)
+        AppLog.i("LOAD", "playlist: " + what + " " + pl.channels.size + " channels, " + pl.groupCount +
+            " groups in " + (System.currentTimeMillis() - t1) + " ms; EPG: " +
+            (if (pl.epgUrl.isEmpty()) "none" else Mask.url(pl.epgUrl.substringBefore(','))))
         return pl
     }
 

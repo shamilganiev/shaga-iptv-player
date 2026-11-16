@@ -33,6 +33,15 @@ object AppLog {
         }
     }
 
-    // For the future "Settings > Log" screen / Для будущего экрана «Настройки > Журнал».
     fun text(): String = synchronized(buf) { buf.joinToString("\n") }
+
+    // For "Settings > Log" / Для «Настройки > Журнал»
+    fun lines(): List<String> = synchronized(buf) { buf.toList() }
+
+    fun size(): Int = synchronized(buf) { buf.size }
+
+    fun clear() {
+        synchronized(buf) { buf.clear() }
+        i("APP", "log cleared")
+    }
 }
