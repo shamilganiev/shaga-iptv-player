@@ -23,7 +23,9 @@ import androidx.media3.exoplayer.source.MediaLoadData
 import java.io.IOException
 
 // What the screen shows / Что показывает экран
-enum class PlayState { IDLE, STARTING, BUFFERING, PLAYING, ERROR }
+// ENDED: a file or a programme of the archive has come to its end (not an error).
+// ENDED: файл или передача архива дошли до конца (это не ошибка).
+enum class PlayState { IDLE, STARTING, BUFFERING, PLAYING, ERROR, ENDED }
 
 class PlayerEngine(context: Context, private val onState: (PlayState) -> Unit) {
     private val appContext: Context = context.applicationContext
@@ -31,6 +33,7 @@ class PlayerEngine(context: Context, private val onState: (PlayState) -> Unit) {
     val exo: ExoPlayer = ExoPlayer.Builder(appContext).build()
 
     private var channel: Channel? = null     // null = nothing is playing / ничего не играет
+    private var link = ""                    // the link being played (live or archive) / играющая ссылка
     private var started = false              // the picture has appeared / картинка появилась
     private var triedHls = false
     private var t0 = 0L
@@ -71,8 +74,13 @@ class PlayerEngine(context: Context, private val onState: (PlayState) -> Unit) {
                     onState(PlayState.PLAYING)
                 }
                 Player.STATE_ENDED -> {
-                    AppLog.w("PLAY", "stream ended +" + ms() + " ms")
-                    onState(PlayState.ERROR)
+                    // A file (or a recorded programme) has ended: not an error. A live stream that
+                    // "ends" has broken.
+                    // Файл (или записанная передача) закончился: это не ошибка. Эфир, который
+                    // «закончился», оборвался.
+                    val file = started && !exo.isCurrentMediaItemLive
+                    AppLog.w("PLAY", "stream ended +" + ms() + " ms" + if (file) " (end of file)" else "")
+                    onState(if (file) PlayState.ENDED else PlayState.ERROR)
                 }
                 else -> {}
             }
@@ -145,15 +153,18 @@ class PlayerEngine(context: Context, private val onState: (PlayState) -> Unit) {
         exo.addAnalyticsListener(analytics)
     }
 
-    fun play(ch: Channel) {
+    // url = a link of the archive; null = the live stream of the channel.
+    // url = ссылка архива; null = эфир канала.
+    fun play(ch: Channel, url: String? = null) {
         if (released) return
         handler.removeCallbacks(startTimeout)
         channel = ch
+        link = url ?: ch.url
         started = false; triedHls = false
         loadLines = 0; errorLines = 0; stateLines = 0
         t0 = System.currentTimeMillis()
-        val mime = guessMime(ch.url)
-        AppLog.i("PLAY", "#" + ch.n + " " + ch.name + " " + Mask.url(ch.url) + " as " + (mime ?: "auto"))
+        val mime = guessMime(link)
+        AppLog.i("PLAY", "#" + ch.n + " " + ch.name + (if (url != null) " ARCHIVE " else " ") + Mask.url(link) + " as " + (mime ?: "auto"))
         onState(PlayState.STARTING)
         open(mime)
         handler.postDelayed(startTimeout, Config.START_TIMEOUT_MS)
@@ -170,7 +181,7 @@ class PlayerEngine(context: Context, private val onState: (PlayState) -> Unit) {
         if (ch.referrer.isNotEmpty()) http.setDefaultRequestProperties(mapOf("Referer" to ch.referrer))
         val sources = DefaultMediaSourceFactory(DefaultDataSource.Factory(appContext, http))
 
-        val item = MediaItem.Builder().setUri(ch.url)
+        val item = MediaItem.Builder().setUri(link)
         if (mime != null) item.setMimeType(mime)
         exo.setMediaSource(sources.createMediaSource(item.build()))
         exo.prepare()
@@ -187,6 +198,30 @@ class PlayerEngine(context: Context, private val onState: (PlayState) -> Unit) {
             else -> null
         }
     }
+
+    // A file with a known length that can be moved: Left/Right, rewind, pause work.
+    // Файл известной длины, который можно перематывать: работают влево/вправо, перемотка, пауза.
+    fun isFile(): Boolean =
+        channel != null && started && !exo.isCurrentMediaItemLive && exo.isCurrentMediaItemSeekable && exo.duration != C.TIME_UNSET
+
+    fun position(): Long = exo.currentPosition
+
+    fun duration(): Long = if (exo.duration == C.TIME_UNSET) 0L else exo.duration
+
+    fun seekBy(ms: Long) {
+        val d = duration()
+        var to = exo.currentPosition + ms
+        if (d > 0) to = to.coerceIn(0L, maxOf(0L, d - 1000L)) else to = maxOf(0L, to)
+        exo.seekTo(to)
+        AppLog.i("PLAY", "seek to " + to / 1000 + " s")
+    }
+
+    fun togglePause() {
+        exo.playWhenReady = !exo.playWhenReady
+        AppLog.i("PLAY", if (exo.playWhenReady) "play" else "pause")
+    }
+
+    fun isPaused(): Boolean = !exo.playWhenReady
 
     fun stop() {
         if (released) return

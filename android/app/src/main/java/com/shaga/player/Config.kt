@@ -46,7 +46,9 @@ object Config {
 
     // Row heights of the lists, dp / Высота строк списков, dp
     const val ROW_GROUP_DP = 44
-    const val ROW_CHANNEL_DP = 60
+    const val ROW_CHANNEL_DP = 64
+    const val ROW_RESULT_DP = 86        // a result of a programme search / результат поиска передач
+    const val ROW_GUIDE_DP = 40         // a programme in the guide / передача в программе канала
 
     // The link dialog ignores OK for this time after it opens: one press of "Done" could
     // work in the closing dialog and in the new one.

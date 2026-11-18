@@ -1,6 +1,6 @@
 // ShaGa IPTV Player for Android — Storage.kt
 // Saved settings: one JSON file, the same scheme as the Roku registry and LG storage:
-//   { v, lang, lastOkId, nextId, playlists[{id, name, url}], zapInvert, favorites[],
+//   { v, lang, lastOkId, nextId, playlists[{id, name, url, arch{t, d}}], zapInvert, favorites[],
 //     groupModes{"g:<group>": s|p|h}, adult{"g:<group>": true|false}, seenGroups[], pin,
 //     last{name, group, cat} }
 // Copies of playlists (the text of the M3U file) lie next to it: pl_<id>.m3u.
@@ -13,7 +13,9 @@ import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
 
-class SavedPlaylist(val id: Int, var name: String, var url: String)
+// archT / archD: the archive setting of the playlist (Catchup.TYPES, days 1..7).
+// archT / archD: настройка архива плейлиста (Catchup.TYPES, дни 1..7).
+class SavedPlaylist(val id: Int, var name: String, var url: String, var archT: String = "auto", var archD: Int = 3)
 
 object Storage {
     private const val FILE = "settings.json"
@@ -60,7 +62,11 @@ object Storage {
                 val p = arr.getJSONObject(i)
                 val url = p.optString("url", "")
                 if (url.isNotEmpty() && playlists.size < MAX_PLAYLISTS) {
-                    playlists.add(SavedPlaylist(p.optInt("id", i + 1), p.optString("name", ""), url))
+                    val arch = p.optJSONObject("arch")
+                    var t = arch?.optString("t", "auto") ?: "auto"
+                    if (t !in Catchup.TYPES) t = "auto"
+                    val d = (arch?.optInt("d", 3) ?: 3).coerceIn(1, 7)
+                    playlists.add(SavedPlaylist(p.optInt("id", i + 1), p.optString("name", ""), url, t, d))
                 }
             }
             for (p in playlists) if (p.id >= nextId) nextId = p.id + 1
@@ -97,7 +103,10 @@ object Storage {
     fun save(ctx: Context) {
         try {
             val arr = JSONArray()
-            for (p in playlists) arr.put(JSONObject().put("id", p.id).put("name", p.name).put("url", p.url))
+            for (p in playlists) {
+                arr.put(JSONObject().put("id", p.id).put("name", p.name).put("url", p.url)
+                    .put("arch", JSONObject().put("t", p.archT).put("d", p.archD)))
+            }
             val fav = JSONArray()
             for (name in favorites) fav.put(name)
             val modes = JSONObject()
@@ -182,4 +191,7 @@ object Storage {
     fun dropCache(ctx: Context, id: Int) {
         cacheFile(ctx, id).delete()
     }
+
+    // The copy of the TV guide (one, for the current playlist) / Копия программы передач (одна)
+    fun epgFile(ctx: Context): File = File(ctx.filesDir, "epg.bin")
 }

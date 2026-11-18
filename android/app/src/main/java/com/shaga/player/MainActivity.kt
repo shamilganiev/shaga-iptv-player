@@ -52,8 +52,40 @@ class MainActivity : ComponentActivity(), NavHost {
     private var currentId = 0                       // its id in Storage / его id в Storage
     private var loadSeq = 0                         // the latest load; older answers are ignored
                                                     // последняя загрузка; устаревшие ответы игнорируются
-    private var searchQuery = ""                     // the last search / последний поиск
-    private var searchResult: List<Channel>? = null  // null = there was no search / поиска не было
+    // The last search: kind (0 channels, 1 programmes, 2 descriptions), text and the result.
+    // Последний поиск: вид (0 каналы, 1 передачи, 2 описания), текст и результат.
+    private var searchKind = 0
+    private var searchQuery = ""
+    private var searchCat: Category? = null
+
+    // The archive being played: channel, programme, link rules, own clock (SPEC: the position of
+    // shift streams goes by the clock, so it is counted here).
+    // Играющий архив: канал, передача, правила ссылки, свои часы (SPEC: позиция shift-потоков
+    // идёт по часам, поэтому считается здесь).
+    private class ArchSession(val ch: Channel, val prog: Prog, val info: ArchInfo) {
+        var startSec = 0L               // the moment the stream starts from / момент, с которого идёт поток
+        var since = 0L                  // when the picture appeared, ms (0 = not yet) / когда пошла картинка
+    }
+    private var arch: ArchSession? = null
+
+    // The TV guide: the link, the load in progress / Программа передач: ссылка, текущая загрузка
+    private var epgLink = ""
+    private var epgSeq = 0
+    private var epgWanted = false        // load after the video starts / загрузить после старта видео
+    private var epgForce = false
+    private val epgNow = Runnable { loadEpg() }
+    private val minuteTick = object : Runnable {
+        override fun run() {
+            ui.minute = System.currentTimeMillis()
+            handler.postDelayed(this, 30_000L)
+        }
+    }
+    private val posTick = object : Runnable {
+        override fun run() {
+            updatePosition()
+            handler.postDelayed(this, 1_000L)
+        }
+    }
 
     private var okDown = false       // OK is being held (pressed in our window) / OK удерживается (нажат в нашем окне)
     private var okLong = false       // the long press has already worked / долгое нажатие уже сработало
@@ -129,6 +161,9 @@ class MainActivity : ComponentActivity(), NavHost {
             )
         }
         handler.postDelayed(lockCheck, 30_000L)
+        ui.minute = System.currentTimeMillis()
+        handler.postDelayed(minuteTick, 30_000L)
+        handler.postDelayed(posTick, 1_000L)
     }
 
     private fun refresh() {
@@ -205,6 +240,10 @@ class MainActivity : ComponentActivity(), NavHost {
             return true
         }
 
+        // Media keys: rewind and pause for the archive and files.
+        // Медиакнопки: перемотка и пауза для архива и файлов.
+        if (ui.screen == Screen.MAIN && mediaKey(code, first)) return true
+
         // Digits: the channel number / Цифры: номер канала
         if (digit >= 0 && ui.screen == Screen.MAIN) {
             if (first) pressDigit(digit)
@@ -247,7 +286,11 @@ class MainActivity : ComponentActivity(), NavHost {
     private fun shortOk() {
         when (ui.screen) {
             Screen.WELCOME -> addPlaylistDialog()
-            Screen.MAIN -> if (ui.numBuf.isNotEmpty()) commitNumber() else nav.key(NavKey.OK, false)
+            Screen.MAIN -> when {
+                ui.numBuf.isNotEmpty() -> commitNumber()
+                nav.fullscreen && ui.playState == PlayState.ENDED -> replay()
+                else -> nav.key(NavKey.OK, false)
+            }
             Screen.LOADING -> {}
         }
     }
@@ -580,6 +623,7 @@ class MainActivity : ComponentActivity(), NavHost {
     // Канал включается. Флажок «PIN введён» сбрасывается, если канал не из его группы;
     // последний канал запоминается.
     override fun startChannel(ch: Channel) {
+        endArchive()
         engine.play(ch)
         val open = Protection.openGroup
         if (open != null && ch.group != open) {
@@ -595,6 +639,7 @@ class MainActivity : ComponentActivity(), NavHost {
     }
 
     override fun stopChannel() {
+        endArchive()
         engine.stop()
         Protection.touch(System.currentTimeMillis())
     }
@@ -608,6 +653,350 @@ class MainActivity : ComponentActivity(), NavHost {
             handler.removeCallbacks(refreshNow)
             handler.postDelayed(refreshNow, 1_500L)
         }
+        // The TV guide too, so that the start of the channel is not slowed down.
+        // Программа передач — тоже, чтобы не тормозить старт канала.
+        if (state == PlayState.PLAYING && epgWanted) {
+            handler.removeCallbacks(epgNow)
+            handler.postDelayed(epgNow, 1_500L)
+        }
+        val a = arch
+        if (a != null && state == PlayState.PLAYING && a.since == 0L) a.since = System.currentTimeMillis()
+    }
+
+    override fun nowMs(): Long = System.currentTimeMillis()
+
+    override fun programmes(ch: Channel): List<Prog> = Epg.list(ch)
+
+    // ---------- the TV guide / программа передач ----------
+
+    // After a playlist is shown: the copy for its link at once (younger than 24 h), the network
+    // after the video starts (no copy, or the copy is older than 12 h).
+    // После показа плейлиста: копия для его ссылки сразу (моложе 24 ч), сеть — после старта
+    // видео (нет копии или копия старше 12 ч).
+    private fun startEpg(pl: Playlist) {
+        val link = EpgText.pickUrl(pl.epgUrl)
+        if (link.isEmpty()) {
+            AppLog.i("EPG", "no link in the playlist" + if (pl.epgUrl.isNotEmpty()) " (\"" + pl.epgUrl.take(40) + "\" is not a link)" else "")
+            epgLink = ""
+            epgSeq++
+            epgWanted = false
+            Epg.clear()
+            ui.epgState = "nolink"
+            epgChanged()
+            return
+        }
+        // The same link: the guide is here or is loading / Та же ссылка: программа есть или грузится
+        if (link == epgLink && (Epg.byKey.isNotEmpty() || ui.epgState == "loading")) return
+        epgLink = link
+        val seq = ++epgSeq
+        Epg.clear()
+        ui.epgState = "loading"
+        ui.epgMb = 0
+        epgChanged()
+        scope.launch {
+            var ok = false
+            withContext(Dispatchers.IO) {
+                try {
+                    ok = Epg.load(Storage.epgFile(this@MainActivity), link)
+                } catch (e: Exception) {
+                    AppLog.w("EPG", "copy not read: " + e.javaClass.simpleName)
+                }
+            }
+            if (seq != epgSeq || isFinishing) return@launch
+            val age = System.currentTimeMillis() - Epg.loadedAt
+            if (ok && age < Epg.MAX_AGE_MS) {
+                AppLog.i("EPG", "copy: " + Epg.channelsWith + " channels, " + age / 60_000 + " min old")
+                ui.epgState = "ready"
+                epgChanged()
+                if (age > Epg.REFRESH_MS) wantEpg() else scheduleEpgRefresh(Epg.REFRESH_MS - age)
+            } else {
+                if (ok) Epg.clear()
+                wantEpg()
+            }
+        }
+    }
+
+    // Load from the network 1.5 s after the picture appears, or soon if nothing is playing.
+    // Загрузка из сети через 1,5 с после появления картинки или скоро, если ничего не играет.
+    private fun wantEpg() {
+        epgWanted = true
+        handler.removeCallbacks(epgNow)
+        handler.postDelayed(epgNow, if (nav.playing != null && ui.playState != PlayState.PLAYING) 20_000L else 1_500L)
+    }
+
+    private fun scheduleEpgRefresh(ms: Long) {
+        handler.removeCallbacks(epgNow)
+        handler.postDelayed({ wantEpg() }, maxOf(60_000L, ms))
+    }
+
+    private fun loadEpg() {
+        epgWanted = false
+        val link = epgLink
+        val pl = playlist ?: return
+        if (link.isEmpty()) return
+        val seq = ++epgSeq
+        val hadOld = Epg.byKey.isNotEmpty()
+        if (!hadOld) ui.epgState = "loading"
+        AppLog.i("EPG", "load " + Mask.url(link) + (if (hadOld) " (update, the old guide stays)" else ""))
+        val channels = pl.channels
+        scope.launch {
+            var result: EpgResult? = null
+            var error = ""
+            withContext(Dispatchers.IO) {
+                try {
+                    result = Epg.download(link, channels, { part, bytes ->
+                        // The first load shows what is parsed every 20 MB / Первая загрузка показывает разобранное каждые 20 МБ
+                        if (!hadOld) handler.post {
+                            if (seq == epgSeq) {
+                                Epg.byKey = part
+                                ui.epgMb = bytes shr 20
+                                epgChanged()
+                            }
+                        } else handler.post { if (seq == epgSeq) ui.epgMb = bytes shr 20 }
+                    }, { seq != epgSeq || isFinishing })
+                } catch (e: LoadError) {
+                    error = e.code + if (e.status > 0) " " + e.status else ""
+                } catch (e: Exception) {
+                    error = e.javaClass.simpleName + ": " + (e.message ?: "")
+                }
+                val r = result
+                if (r != null && seq == epgSeq) {
+                    Epg.set(r, link, System.currentTimeMillis())
+                    try {
+                        Epg.save(Storage.epgFile(this@MainActivity))
+                    } catch (e: Exception) {
+                        AppLog.w("EPG", "copy not saved: " + e.javaClass.simpleName)
+                    }
+                }
+            }
+            if (seq != epgSeq || isFinishing) return@launch
+            if (result != null) {
+                ui.epgState = "ready"
+                AppLog.i("EPG", "ready: " + Epg.channelsWith + " channels with a guide out of " + channels.size)
+                scheduleEpgRefresh(Epg.REFRESH_MS)
+            } else {
+                AppLog.e("EPG", "not loaded: " + error)
+                ui.epgState = if (Epg.byKey.isNotEmpty() && hadOld) "ready" else "error"
+                if (!hadOld) Epg.byKey = emptyMap()
+                // Again in 30 minutes / Ещё раз через 30 минут
+                scheduleEpgRefresh(30 * 60_000L)
+            }
+            ui.epgMb = 0
+            epgChanged()
+        }
+    }
+
+    private fun epgChanged() {
+        ui.epgTick++
+        nav.refreshGuide()
+        updateSettingsPage()
+        refresh()
+    }
+
+    // ---------- programmes, archive / передачи, архив ----------
+
+    // OK on a programme: on air -> live (a second OK -> full screen), past -> archive,
+    // future -> description.
+    // OK на передаче: идёт сейчас -> эфир (второй OK -> полный экран), прошла -> архив,
+    // будущая -> описание.
+    override fun programmeOk(ch: Channel, p: Prog) {
+        val now = System.currentTimeMillis()
+        when {
+            p.s > now -> showDescription(ch, p)
+            p.e > now -> {
+                if (arch == null && sameChannel(nav.playing, ch) && !nav.playFailed) nav.markPlaying(full = true)
+                else nav.startSelected(full = false)
+            }
+            else -> startArchive(ch, p)
+        }
+    }
+
+    private fun archInfo(ch: Channel): ArchInfo? {
+        val sp = Storage.byId(currentId) ?: return null
+        return Catchup.info(ch, sp.archT, sp.archD)
+    }
+
+    // A programme from the archive, from its start. A second OK on the same one -> full screen.
+    // Передача из архива с начала. Второй OK на той же -> полный экран.
+    private fun startArchive(ch: Channel, p: Prog) {
+        val now = System.currentTimeMillis()
+        val info = archInfo(ch)
+        if (info == null) {
+            AppLog.i("PLAY", "archive: not set up for this playlist")
+            showMessage("archive", S.t("archLabel"), S.t("archNotSet"))
+            return
+        }
+        if (!Catchup.covers(info, p.s / 1000, now / 1000)) {
+            AppLog.i("PLAY", "archive: older than " + info.d + " days")
+            showMessage("archive", S.t("archLabel"), S.t("archUnavailable"))
+            return
+        }
+        val a = arch
+        if (a != null && a.prog.s == p.s && sameChannel(a.ch, ch) && sameChannel(nav.playing, ch)) {
+            nav.markPlaying(full = true)
+            return
+        }
+        // A channel of another group drops the "PIN entered" flag, as for the live stream.
+        // Канал другой группы сбрасывает флажок «PIN введён», как и для эфира.
+        val open = Protection.openGroup
+        if (open != null && ch.group != open) {
+            Protection.close()
+            handler.post { rebuildRows(reset = false) }
+        }
+        val s = ArchSession(ch, p, info)
+        arch = s
+        ui.archive = p
+        AppLog.i("PLAY", "archive: type " + info.t + ", programme " + TimeText.hm(p.s) + "-" + TimeText.hm(p.e))
+        playArchiveAt(s, p.s / 1000)
+        nav.markPlaying(full = false)
+    }
+
+    private fun playArchiveAt(s: ArchSession, startSec: Long) {
+        s.startSec = startSec
+        s.since = 0L
+        val url = Catchup.url(s.ch.url, s.info, startSec, s.prog.e / 1000, System.currentTimeMillis() / 1000)
+        engine.play(s.ch, url)
+    }
+
+    private fun endArchive() {
+        if (arch != null) {
+            arch = null
+            ui.archive = null
+        }
+    }
+
+    private fun archPos(s: ArchSession): Long =
+        s.startSec + if (s.since > 0) (System.currentTimeMillis() - s.since) / 1000 else 0L
+
+    // Left/Right in full screen: the archive ±60 s (a restart of the stream from the new place),
+    // a file ±10 s; the live stream — nothing.
+    // Влево/вправо на полном экране: архив ±60 с (перезапуск потока с нового места), файл ±10 с;
+    // эфир — ничего.
+    override fun seek(d: Int) {
+        seekBy(d, archStep = 60L, fileStep = 10_000L)
+    }
+
+    private fun seekBy(d: Int, archStep: Long, fileStep: Long) {
+        val a = arch
+        if (a != null) {
+            val nowSec = System.currentTimeMillis() / 1000
+            val to = (archPos(a) + d * archStep).coerceIn(a.prog.s / 1000, maxOf(a.prog.s / 1000, minOf(a.prog.e / 1000, nowSec - 30)))
+            AppLog.i("PLAY", "archive: seek to " + TimeText.hm(to * 1000))
+            playArchiveAt(a, to)
+            nav.showInfo()
+            updatePosition()
+            return
+        }
+        if (engine.isFile()) {
+            engine.seekBy(d * fileStep)
+            nav.showInfo()
+            updatePosition()
+        }
+    }
+
+    // Fast forward / rewind: archive ±5 min, file ±30 s; Play/Pause for files.
+    // Перемотка: архив ±5 мин, файл ±30 с; Play/Pause для файлов.
+    private fun mediaKey(code: Int, first: Boolean): Boolean {
+        val d = when (code) {
+            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD -> 1
+            KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD -> -1
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE -> 0
+            else -> return false
+        }
+        if (!first || nav.playing == null) return true
+        if (d == 0) {
+            if (engine.isFile() && arch == null) {
+                engine.togglePause()
+                nav.showInfo()
+            }
+        } else {
+            seekBy(d, archStep = 300L, fileStep = 30_000L)
+        }
+        return true
+    }
+
+    // OK on "The end": the file again from the start, the archive programme again.
+    // OK на «Конец»: файл снова с начала, передача архива снова.
+    private fun replay() {
+        val a = arch
+        if (a != null) {
+            playArchiveAt(a, a.prog.s / 1000)
+        } else {
+            val ch = nav.playing ?: return
+            engine.play(ch)
+        }
+        nav.showInfo()
+    }
+
+    // The position line of the full screen: archive and files.
+    // Строка позиции на полном экране: архив и файлы.
+    private fun updatePosition() {
+        if (!nav.fullscreen) {
+            if (ui.posFrac >= 0f) ui.posFrac = -1f
+            return
+        }
+        val a = arch
+        if (a != null) {
+            val pos = archPos(a)
+            val s = a.prog.s / 1000
+            val e = a.prog.e / 1000
+            ui.posText = TimeText.hm(pos * 1000) + "  (" + TimeText.clock((pos - s) * 1000) + " / " + TimeText.clock((e - s) * 1000) + ")"
+            ui.posFrac = if (e > s) ((pos - s).toFloat() / (e - s)).coerceIn(0f, 1f) else 0f
+        } else if (engine.isFile()) {
+            val d = engine.duration()
+            ui.posText = TimeText.clock(engine.position()) + " / " + TimeText.clock(d) + if (engine.isPaused()) "  ||" else ""
+            ui.posFrac = if (d > 0) (engine.position().toFloat() / d).coerceIn(0f, 1f) else 0f
+        } else if (ui.posFrac >= 0f) {
+            ui.posFrac = -1f
+        }
+    }
+
+    // A description window: the short text at once, the full one from the file when it comes.
+    // Окно описания: короткий текст сразу, полный — из файла, когда придёт.
+    private fun showDescription(ch: Channel, p: Prog) {
+        val now = System.currentTimeMillis()
+        val head = TimeText.dayPrefix(p.s, now) + TimeText.hm(p.s) + " – " + TimeText.hm(p.e) + "  ·  " + ch.name + "\n\n"
+        val items = ArrayList<PopItem>()
+        items.add(PopItem(S.t("ok")))
+        val canWatch = p.s <= now
+        if (canWatch) items.add(PopItem(S.t("ctxWatch")))
+        val pop = Popup("description", p.t, head + p.d.ifEmpty { S.t("noDesc") }, items, 0, { i -> if (i == 1) programmeOk(ch, p) })
+        showPopup(pop)
+        if (p.off < 0) return
+        val t0 = System.currentTimeMillis()
+        scope.launch {
+            var full: String? = null
+            withContext(Dispatchers.IO) {
+                try {
+                    full = Epg.fullDesc(p)
+                } catch (e: Exception) {
+                    AppLog.w("EPG", "description: " + e.javaClass.simpleName + ": " + (e.message ?: ""))
+                }
+            }
+            val f = full
+            AppLog.i("UI", "description: " + (if (f != null) "file, " + f.length + " characters" else "memory, " + p.d.length + " characters") +
+                " in " + (System.currentTimeMillis() - t0) + " ms")
+            if (f != null && f.isNotEmpty() && ui.popup === pop) {
+                pop.message = head + f
+                refresh()
+            }
+        }
+    }
+
+    // Long OK on a programme (in the guide or a search result).
+    // Долгое OK на передаче (в программе канала или результате поиска).
+    override fun openProgrammeMenu(ch: Channel, p: Prog, inResults: Boolean) {
+        val now = System.currentTimeMillis()
+        val acts = ArrayList<Pair<String, () -> Unit>>()
+        acts.add(S.t("ctxDesc") to { showDescription(ch, p) })
+        if (p.s <= now) acts.add(S.t("ctxWatch") to { programmeOk(ch, p) })
+        if (inResults) {
+            if (ch.name in Storage.favorites) acts.add(S.t("ctxFavRemove") to { toggleFavorite(ch) })
+            else if (Protection.general(ch.group)) acts.add(S.t("ctxFavAdd") to { toggleFavorite(ch) })
+            if (Protection.viewable(ch.group)) acts.add(S.t("ctxGoGroup") to { nav.openCategory(Catalog.groupId(ch.group), ch) })
+        }
+        acts.add(S.t("cancel") to {})
+        showPopup(Popup("programme menu", p.t, "", acts.map { PopItem(it.first) }, 0, { acts[it].second() }))
     }
 
     // ---------- left column rows / строки левой колонки ----------
@@ -615,7 +1004,7 @@ class MainActivity : ComponentActivity(), NavHost {
     // reset = true for a new playlist; false keeps the cursor (language, favourites, search, modes).
     // reset = true для нового плейлиста; false сохраняет курсор (язык, избранное, поиск, режимы).
     private fun rebuildRows(reset: Boolean) {
-        nav.setRows(Catalog.rows(playlist, Storage.favorites, searchQuery, searchResult) { key -> S.t(key) }, reset)
+        nav.setRows(Catalog.rows(playlist, Storage.favorites, searchCat) { key -> S.t(key) }, reset)
     }
 
     // ---------- text input / ввод текста ----------
@@ -824,7 +1213,7 @@ class MainActivity : ComponentActivity(), NavHost {
                 currentId = p.id
                 playlist = null
                 searchQuery = ""
-                searchResult = null
+                searchCat = null
                 ui.playlistName = p.name
                 ui.listError = errorText(error)
                 rebuildRows(reset = true)
@@ -843,7 +1232,7 @@ class MainActivity : ComponentActivity(), NavHost {
         Storage.lastOkId = p.id
         playlist = pl
         searchQuery = ""
-        searchResult = null
+        searchCat = null
         if (Protection.noteGroups(Catalog.groupsOf(pl).keys)) AppLog.i("UI", "new groups checked for 18+")
         Storage.save(this)
         purgeFavorites()
@@ -852,6 +1241,7 @@ class MainActivity : ComponentActivity(), NavHost {
         rebuildRows(reset = true)
         ui.screen = Screen.MAIN
         if (startup) autoStartLast()
+        startEpg(pl)
     }
 
     // The last channel starts if its group is Shown and has no 18+ mark; otherwise the cursor
@@ -912,11 +1302,10 @@ class MainActivity : ComponentActivity(), NavHost {
                 if (Protection.noteGroups(Catalog.groupsOf(r.playlist).keys)) Storage.save(this@MainActivity)
                 purgeFavorites()
                 // The search is made again on the new list / Поиск выполняется заново на новом списке
-                val q = searchQuery
-                if (searchResult != null) searchResult = findChannels(q)
-                if (searchResult?.isEmpty() == true) { searchResult = null; searchQuery = "" }
+                if (searchCat != null) searchCat = makeSearch(searchKind, searchQuery)
                 rebuildRows(reset = false)
                 AppLog.i("LOAD", "playlist: updated, " + r.playlist.channels.size + " channels")
+                startEpg(r.playlist)
             } else {
                 AppLog.i("LOAD", "playlist: no changes")
             }
@@ -973,7 +1362,7 @@ class MainActivity : ComponentActivity(), NavHost {
         } else {
             loadSeq++
             searchQuery = ""
-            searchResult = null
+            searchCat = null
             ui.playlistName = ""
             ui.listError = ""
             rebuildRows(reset = true)
@@ -990,12 +1379,24 @@ class MainActivity : ComponentActivity(), NavHost {
 
     // ---------- search / поиск ----------
 
+    // "> Search": channels, programmes, descriptions (the last two when there is a TV guide).
+    // «> Поиск»: каналы, передачи, описания (последние два — когда есть программа передач).
     override fun openSearch() {
         if (playlist == null) return
+        if (Epg.byKey.isEmpty()) {
+            searchInput(0)
+            return
+        }
+        val items = listOf(PopItem(S.t("findChan")), PopItem(S.t("findTitle")), PopItem(S.t("findDesc")), PopItem(S.t("cancel")))
+        showPopup(Popup("search kind", S.t("svcSearch"), "", items, searchKind, { i -> if (i < 3) searchInput(i) }))
+    }
+
+    private fun searchInput(kind: Int) {
+        val title = S.t(when (kind) { 1 -> "findTitle"; 2 -> "findDesc"; else -> "findChan" })
         showInput(
-            what = "search", title = S.t("searchTitle"), message = S.t("findMaskHint"),
-            text = searchQuery, hint = "", isLink = false
-        ) { raw -> runSearch(raw.trim()) }
+            what = "search $kind", title = title, message = S.t("findMaskHint"),
+            text = if (kind == searchKind) searchQuery else "", hint = "", isLink = false
+        ) { raw -> runSearch(kind, raw.trim()) }
     }
 
     // Masks * and ?, transliteration; hidden, locked and 18+ groups are not searched.
@@ -1006,20 +1407,54 @@ class MainActivity : ComponentActivity(), NavHost {
         return pl.channels.filter { Protection.general(it.group) && rx.containsMatchIn(it.name) }
     }
 
-    // The results become the category "Search: ..." with the cursor on its first channel.
+    // Programmes by title (kind 1) or by the first 200 characters of the description (kind 2):
+    // up to 300 nearest to now; past ones by time, then on air, then future ones by time.
+    // Передачи по названию (вид 1) или по первым 200 символам описания (вид 2): до 300 ближайших
+    // к «сейчас»; прошедшие по времени, затем идущие, затем будущие по времени.
+    private fun makeSearch(kind: Int, q: String): Category? {
+        if (kind == 0) {
+            val found = findChannels(q)
+            return if (found.isEmpty()) null else Category(Catalog.SEARCH, S.t("searchPrefix") + " " + q, found)
+        }
+        val pl = playlist ?: return null
+        val rx = TextUtil.findRegex(q) ?: return null
+        val now = System.currentTimeMillis()
+        val all = ArrayList<Pair<Channel, Prog>>()
+        for (ch in pl.channels) {
+            if (!Protection.general(ch.group)) continue
+            for (p in Epg.list(ch)) {
+                if (rx.containsMatchIn(if (kind == 1) p.t else p.d)) all.add(ch to p)
+            }
+        }
+        if (all.isEmpty()) return null
+        val near = all.sortedBy { Math.abs(it.second.s - now) }.take(300)
+        val ordered = near.filter { it.second.e <= now }.sortedBy { it.second.s } +
+            near.filter { it.second.s <= now && now < it.second.e } +
+            near.filter { it.second.s > now }.sortedBy { it.second.s }
+        val prefix = S.t(if (kind == 1) "findTitlePrefix" else "findDescPrefix")
+        return Category(
+            Catalog.SEARCH, prefix + " " + q, ordered.map { it.first }, progs = ordered.map { it.second },
+            countText = if (all.size > near.size) S.t("findFirst").replace("{n}", near.size.toString()) else null
+        )
+    }
+
+    // The results become the category "Search: ..." with the cursor on its first row.
     // Nothing found = a window, the previous results stay.
-    // Результаты становятся категорией «Поиск: ...» с курсором на первом канале.
+    // Результаты становятся категорией «Поиск: ...» с курсором на первой строке.
     // Ничего не найдено = окно, прежние результаты остаются.
-    private fun runSearch(q: String) {
+    private fun runSearch(kind: Int, q: String) {
         if (TextUtil.findRegex(q) == null) return
-        val found = findChannels(q)
-        AppLog.i("UI", "search: " + q.length + " characters -> " + found.size + " channels")
-        if (found.isEmpty()) {
+        val t0 = System.currentTimeMillis()
+        val cat = makeSearch(kind, q)
+        AppLog.i("UI", "search $kind: " + q.length + " characters -> " + (cat?.channels?.size ?: 0) +
+            " in " + (System.currentTimeMillis() - t0) + " ms")
+        if (cat == null) {
             showMessage("nothing found", S.t("searchTitle"), S.t("noResults").replace("{q}", q))
             return
         }
+        searchKind = kind
         searchQuery = q
-        searchResult = found
+        searchCat = cat
         rebuildRows(reset = false)
         nav.openCategory(Catalog.SEARCH, null)
     }
@@ -1047,6 +1482,13 @@ class MainActivity : ComponentActivity(), NavHost {
     // «Перейти в группу» — только если открыт не её список и группу можно смотреть.
     override fun openChannelMenu(ch: Channel, ownGroup: Boolean) {
         val acts = ArrayList<Pair<String, () -> Unit>>()
+        val now = System.currentTimeMillis()
+        val cur = Epg.now(ch, now)
+        if (cur != null) acts.add(S.t("ctxDesc") to { showDescription(ch, cur) })
+        if (Epg.list(ch).isNotEmpty()) acts.add(S.t("ctxGuide") to { nav.showGuide() })
+        if (cur != null && Catchup.covers(archInfo(ch), cur.s / 1000, now / 1000)) {
+            acts.add(S.t("ctxFromStart") to { startArchive(ch, cur) })
+        }
         if (ch.name in Storage.favorites) acts.add(S.t("ctxFavRemove") to { toggleFavorite(ch) })
         else if (Protection.general(ch.group)) acts.add(S.t("ctxFavAdd") to { toggleFavorite(ch) })
         if (!ownGroup && Protection.viewable(ch.group)) {
@@ -1092,7 +1534,7 @@ class MainActivity : ComponentActivity(), NavHost {
         val groups = if (pl == null) 0 else Catalog.groupsOf(pl).size
         return listOf(
             SetRow("playlist", S.t("playlistRow") + " >", plValue),
-            SetRow("refresh", S.t("sRefresh")),
+            SetRow("epg", S.t("sEpg"), epgStatus()),
             SetRow("groups", S.t("sGroups") + " >", S.t("groupsValue").replace("{n}", groups.toString())),
             SetRow("pin", S.t("sPin"), S.t(if (Protection.hasPin()) "sPinOn" else "sPinOff")),
             SetRow("zap", S.t("sZap"), S.t(if (Storage.zapInvert) "zapList" else "zapClassic")),
@@ -1100,6 +1542,35 @@ class MainActivity : ComponentActivity(), NavHost {
             SetRow("about", S.t("aboutRow"), "v" + BuildConfig.VERSION_NAME),
             SetRow("close", S.t("sClose"))
         )
+    }
+
+    private fun epgStatus(): String = when (ui.epgState) {
+        "loading" -> S.t("epgLoadingShort") + if (ui.epgMb > 0) " " + ui.epgMb + " MB" else ""
+        "nolink" -> S.t("epgNoSourceShort")
+        "error" -> S.t("epgErrorShort")
+        "ready" -> S.t("epgStatus").replace("{n}", S.t("channels").replace("{n}", Epg.channelsWith.toString()))
+            .replace("{time}", TimeText.hm(Epg.loadedAt))
+        else -> ""
+    }
+
+    private fun archName(t: String): String = when (t) {
+        "auto" -> S.t("archAuto")
+        "off" -> S.t("archOff")
+        else -> t
+    }
+
+    // Settings > Playlist: the playlists window, update, archive type and depth.
+    // Настройки > Плейлист: окно плейлистов, обновление, тип и глубина архива.
+    private fun playlistRows(): List<SetRow> {
+        val p = Storage.byId(currentId)
+        val rows = ArrayList<SetRow>()
+        rows.add(SetRow("pls", S.t("playlistsRow") + " >", p?.name ?: ""))
+        if (p != null) {
+            rows.add(SetRow("refresh", S.t("sRefresh")))
+            rows.add(SetRow("arch", S.t("archRow"), archName(p.archT)))
+            rows.add(SetRow("archd", S.t("archDaysRow"), S.t("archDaysValue").replace("{n}", p.archD.toString())))
+        }
+        return rows
     }
 
     private fun groupRows(): List<SetRow> {
@@ -1117,6 +1588,7 @@ class MainActivity : ComponentActivity(), NavHost {
         val page = ui.settings ?: return
         when (page.page) {
             SetPage.MAIN -> page.update(mainRows())
+            SetPage.PLAYLIST -> page.update(playlistRows())
             SetPage.GROUPS -> page.update(groupRows())
             SetPage.LOG -> {}
         }
@@ -1142,7 +1614,11 @@ class MainActivity : ComponentActivity(), NavHost {
             AppLog.i("UI", "settings close")
             ui.settings = null
         } else {
-            val from = if (page.page == SetPage.GROUPS) "groups" else "log"
+            val from = when (page.page) {
+                SetPage.GROUPS -> "groups"
+                SetPage.PLAYLIST -> "playlist"
+                else -> "log"
+            }
             ui.settings = SettingsPage(SetPage.MAIN, S.t("settings"), "", mainRows(), mainRows().indexOfFirst { it.id == from })
         }
         refresh()
@@ -1152,8 +1628,15 @@ class MainActivity : ComponentActivity(), NavHost {
         val row = page.current() ?: return
         when (page.page) {
             SetPage.MAIN -> when (row.id) {
-                "playlist" -> openPlaylists()
-                "refresh" -> Storage.byId(currentId)?.let { updatePlaylist(it, manual = true) }
+                "playlist" -> {
+                    ui.settings = SettingsPage(SetPage.PLAYLIST, S.t("playlistRow"), "", playlistRows(), 0)
+                    refresh()
+                }
+                "epg" -> if (epgLink.isNotEmpty()) {
+                    AppLog.i("EPG", "manual update")
+                    loadEpg()
+                    updateSettingsPage()
+                }
                 "groups" -> {
                     ui.settings = SettingsPage(SetPage.GROUPS, S.t("sGroups"), S.t("sGroupsSub"), groupRows(), 0)
                     refresh()
@@ -1173,6 +1656,12 @@ class MainActivity : ComponentActivity(), NavHost {
                 )
                 "close" -> openExitDialog()
             }
+            SetPage.PLAYLIST -> when (row.id) {
+                "pls" -> openPlaylists()
+                "refresh" -> Storage.byId(currentId)?.let { updatePlaylist(it, manual = true) }
+                "arch" -> archTypeWindow()
+                "archd" -> archDaysWindow()
+            }
             SetPage.GROUPS -> groupModeWindow(row.id.removePrefix("g:"))
             SetPage.LOG -> ask("clear log", S.t("sLog"), "", S.t("logClear")) {
                 AppLog.clear()
@@ -1181,6 +1670,28 @@ class MainActivity : ComponentActivity(), NavHost {
                 refresh()
             }
         }
+    }
+
+    private fun archTypeWindow() {
+        val p = Storage.byId(currentId) ?: return
+        val items = Catchup.TYPES.map { PopItem(archName(it), it == p.archT) }
+        showPopup(Popup("archive type", S.t("archRow"), S.t("archMsg"), items, maxOf(0, Catchup.TYPES.indexOf(p.archT)), { i ->
+            p.archT = Catchup.TYPES[i]
+            Storage.save(this)
+            AppLog.i("UI", "archive type: " + p.archT)
+            updateSettingsPage()
+        }))
+    }
+
+    private fun archDaysWindow() {
+        val p = Storage.byId(currentId) ?: return
+        val items = (1..7).map { PopItem(S.t("archDaysValue").replace("{n}", it.toString()), it == p.archD) }
+        showPopup(Popup("archive days", S.t("archDaysRow"), S.t("archDaysMsg"), items, p.archD - 1, { i ->
+            p.archD = i + 1
+            Storage.save(this)
+            AppLog.i("UI", "archive days: " + p.archD)
+            updateSettingsPage()
+        }))
     }
 
     // OK on a group: three modes (the current one is marked), the 18+ switch, Close.

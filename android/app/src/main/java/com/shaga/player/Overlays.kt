@@ -14,20 +14,33 @@ class PopItem(val label: String, val mark: Boolean = false)
 
 // A vertical list of items; one step is cyclic. what = the name for the log.
 // Вертикальный список пунктов; шаг на одну строку циклический. what = имя для журнала.
+// message may be replaced later (a full description arrives). A long message scrolls: Down on the
+// last item / Up on the first one move the text instead of wrapping around.
+// message можно заменить позже (пришло полное описание). Длинный текст прокручивается: вниз на
+// последнем пункте / вверх на первом двигают текст вместо перехода по кругу.
 class Popup(
     val what: String,
     val title: String,
-    val message: String,
+    message: String,
     val items: List<PopItem>,
     start: Int,
     val onPick: (Int) -> Unit,
     val onCancel: () -> Unit = {}
 ) {
+    var message = message
     var sel = start.coerceIn(0, maxOf(0, items.size - 1))
         private set
+    var scroll = 0                      // scroll of a long message, px / прокрутка длинного текста, px
+        private set
+
+    fun isLong(): Boolean = message.length > 280
 
     fun move(d: Int) {
         if (items.isEmpty()) return
+        if (isLong()) {
+            if (d > 0 && sel == items.size - 1) { scroll += 160; return }
+            if (d < 0 && sel == 0) { scroll = maxOf(0, scroll - 160); return }
+        }
         sel = ((sel + d) % items.size + items.size) % items.size
     }
 
@@ -95,7 +108,7 @@ class PinPad(
 // value = the text on the right of a row / текст справа в строке
 class SetRow(val id: String, val label: String, val value: String = "")
 
-enum class SetPage { MAIN, GROUPS, LOG }
+enum class SetPage { MAIN, PLAYLIST, GROUPS, LOG }
 
 // A page of Settings: a list of rows with the cursor; one step is cyclic, paging stops at the edges.
 // Страница Настроек: список строк с курсором; шаг циклический, листание останавливается у краёв.

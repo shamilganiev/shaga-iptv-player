@@ -18,12 +18,18 @@ package com.shaga.player
 // режимы групп), чтобы вернуть курсор на место: "__search", "__fav", "__all", "g:<группа>".
 // group = название группы плейлиста (только у «g:»); locked = «Название [PIN]» без счётчика;
 // каналы закрытой группы пусты, пока не введён PIN.
+// progs: results of a programme search — the found programme of each row (parallel to channels);
+// countText replaces the counter ("first 300").
+// progs: результаты поиска передач — найденная передача каждой строки (параллельно channels);
+// countText заменяет счётчик («первые 300»).
 class Category(
     val id: String,
     val title: String,
     val channels: List<Channel>,
     val group: String? = null,
-    val locked: Boolean = false
+    val locked: Boolean = false,
+    val progs: List<Prog>? = null,
+    val countText: String? = null
 )
 
 enum class RowKind { SEARCH, PLAYLISTS, LANGUAGE, SETTINGS, CATEGORY }
@@ -56,9 +62,11 @@ object Catalog {
     // Левая колонка (SPEC.md, раздел 2): служебные строки; затем «Поиск: ...» (если был поиск),
     // «Избранное», «Все каналы» и нескрытые группы в порядке плейлиста. Правила защиты — из
     // Protection; t даёт строку интерфейса по ключу.
+    // search: the category of the last search (channels or programmes), already filtered.
+    // search: категория последнего поиска (каналы или передачи), уже отфильтрованная.
     fun rows(
         pl: Playlist?, favorites: Collection<String>,
-        searchQuery: String, searchResult: List<Channel>?,
+        search: Category?,
         t: (String) -> String
     ): List<LeftRow> {
         val out = ArrayList<LeftRow>()
@@ -69,8 +77,13 @@ object Catalog {
         if (pl == null || pl.channels.isEmpty()) return out
 
         fun add(c: Category) = out.add(LeftRow(RowKind.CATEGORY, c.title, c))
-        if (searchResult != null) {
-            add(Category(SEARCH, t("searchPrefix") + " " + searchQuery, searchResult.filter { Protection.general(it.group) }))
+        if (search != null) {
+            // Rows of groups that became closed since the search are dropped.
+            // Строки групп, закрытых после поиска, убираются.
+            val keep = search.channels.indices.filter { Protection.general(search.channels[it].group) }
+            val progs = search.progs
+            add(Category(SEARCH, search.title, keep.map { search.channels[it] }, progs = progs?.let { pr -> keep.map { pr[it] } },
+                countText = if (keep.size == search.channels.size) search.countText else null))
         }
         val favSet = favorites.toHashSet()
         add(Category(FAV, t("favorites"), pl.channels.filter { it.name in favSet && Protection.general(it.group) }))
@@ -103,7 +116,9 @@ object Catalog {
 
 enum class NavKey { UP, DOWN, LEFT, RIGHT, OK, PAGE_UP, PAGE_DOWN, CH_UP, CH_DOWN }
 
-enum class Pane { GROUPS, CHANNELS }
+// GUIDE: the programme of one channel in the third column (right of the channels).
+// GUIDE: программа одного канала в третьей колонке (справа от каналов).
+enum class Pane { GROUPS, CHANNELS, GUIDE }
 
 // What the logic asks the app to do / Что логика просит сделать приложение
 interface NavHost {
@@ -119,6 +134,13 @@ interface NavHost {
     // ownGroup = the list of the channel's own group is open / открыт список группы самого канала
     fun openChannelMenu(ch: Channel, ownGroup: Boolean)
     fun openGroupMenu(cat: Category)
+    fun programmes(ch: Channel): List<Prog>          // the guide of a channel / программа канала
+    fun nowMs(): Long
+    // OK on a programme: on air -> live, past -> archive, future -> description.
+    // OK на передаче: идёт сейчас -> эфир, прошла -> архив, будущая -> описание.
+    fun programmeOk(ch: Channel, p: Prog)
+    fun openProgrammeMenu(ch: Channel, p: Prog, inResults: Boolean)
+    fun seek(d: Int)                                 // Left/Right in full screen / влево/вправо на полном экране
 }
 
 class Nav(private val host: NavHost, startInKeyMode: Boolean) {
@@ -143,6 +165,15 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
         private set
     var infoTick = 0                    // grows when the channel bar must appear / растёт, когда надо показать плашку
         private set
+
+    // The guide of one channel (Pane.GUIDE) / Программа одного канала (Pane.GUIDE)
+    var guide: List<Prog> = emptyList()
+        private set
+    var guideSel = 0
+        private set
+    var guideCh: Channel? = null
+        private set
+    var guidePerPage = 8
 
     // true = the remote is used (the cursor is drawn); false = touch.
     // true = работают с пульта (курсор рисуется); false = пальцем.
@@ -293,15 +324,103 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
     }
 
     private fun listKey(k: NavKey, repeat: Boolean) {
+        if (column == Pane.GUIDE) {
+            guideKey(k, repeat)
+            return
+        }
         when (k) {
             NavKey.UP -> move(-1, repeat)
             NavKey.DOWN -> move(1, repeat)
             NavKey.PAGE_UP, NavKey.CH_UP -> page(-1)
             NavKey.PAGE_DOWN, NavKey.CH_DOWN -> page(1)
             NavKey.LEFT -> if (column == Pane.CHANNELS) toGroups()
-            NavKey.RIGHT -> if (column == Pane.GROUPS) enterChannels()
+            NavKey.RIGHT -> if (column == Pane.GROUPS) enterChannels() else openGuide()
             NavKey.OK -> if (!repeat) ok()
         }
+    }
+
+    // ---------- the guide of a channel / программа канала ----------
+
+    // Right from the channels: the guide of the channel under the cursor; the cursor stands on the
+    // programme on air (for a search result — on the found programme).
+    // Вправо из каналов: программа канала под курсором; курсор на передаче в эфире (для
+    // результата поиска — на найденной передаче).
+    private fun openGuide() {
+        val cat = shown ?: return
+        val ch = cat.channels.getOrNull(chanSel) ?: return
+        val list = host.programmes(ch)
+        if (list.isEmpty()) return
+        val found = cat.progs?.getOrNull(chanSel)
+        var i = if (found != null) list.indexOfFirst { it.s == found.s } else -1
+        if (i < 0) i = Epg.nearIndex(list, host.nowMs())
+        guide = list
+        guideCh = ch
+        guideSel = maxOf(0, i)
+        column = Pane.GUIDE
+    }
+
+    private fun guideKey(k: NavKey, repeat: Boolean) {
+        val n = guide.size
+        when (k) {
+            NavKey.UP, NavKey.DOWN -> {
+                if (n == 0) return
+                var i = guideSel + if (k == NavKey.UP) -1 else 1
+                if (i < 0 || i >= n) {
+                    if (repeat) return
+                    i = (i + n) % n
+                }
+                guideSel = i
+            }
+            NavKey.PAGE_UP, NavKey.CH_UP -> if (n > 0) guideSel = (guideSel - guidePerPage).coerceIn(0, n - 1)
+            NavKey.PAGE_DOWN, NavKey.CH_DOWN -> if (n > 0) guideSel = (guideSel + guidePerPage).coerceIn(0, n - 1)
+            NavKey.LEFT -> column = Pane.CHANNELS
+            NavKey.RIGHT -> {}
+            NavKey.OK -> if (!repeat) {
+                val ch = guideCh ?: return
+                val p = guide.getOrNull(guideSel) ?: return
+                host.programmeOk(ch, p)
+            }
+        }
+    }
+
+    // The guide is shown in the third column: for a result row, the found programme is in it.
+    // Программа показывается в третьей колонке: для строки результата в ней найденная передача.
+    fun refreshGuide() {
+        val ch = guideCh ?: return
+        guide = host.programmes(ch)
+        if (guide.isEmpty() && column == Pane.GUIDE) column = Pane.CHANNELS
+        guideSel = guideSel.coerceIn(0, maxOf(0, guide.size - 1))
+    }
+
+    // The channel and its row become "playing" without starting the live stream (archive).
+    // Канал и его строка становятся «играющими» без запуска эфира (архив).
+    fun markPlaying(full: Boolean) {
+        val cat = shown ?: return
+        val ch = cat.channels.getOrNull(chanSel) ?: return
+        playing = ch; playCat = cat; playPos = chanSel; playFailed = false
+        if (full) {
+            fullscreen = true
+            infoTick++
+        }
+        host.navChanged()
+    }
+
+    // The live stream of the channel under the cursor (from the guide or a result).
+    // Эфир канала под курсором (из программы или результата).
+    fun startSelected(full: Boolean) {
+        val cat = shown ?: return
+        if (chanSel !in cat.channels.indices) return
+        start(cat, chanSel)
+        if (full) {
+            fullscreen = true
+            infoTick++
+        }
+        host.navChanged()
+    }
+
+    fun showInfo() {
+        infoTick++
+        host.navChanged()
     }
 
     private fun fullKey(k: NavKey, repeat: Boolean) {
@@ -310,6 +429,8 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
             NavKey.UP, NavKey.CH_UP -> step(if (zapInvert) -1 else 1)
             NavKey.DOWN, NavKey.CH_DOWN -> step(if (zapInvert) 1 else -1)
             NavKey.OK -> if (playFailed) restart() else fold()
+            NavKey.LEFT -> host.seek(-1)
+            NavKey.RIGHT -> host.seek(1)
             else -> {}
         }
     }
@@ -390,6 +511,13 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
     private fun activateChannel() {
         val cat = shown ?: return
         val ch = cat.channels.getOrNull(chanSel) ?: return
+        // A result of a programme search: OK works as in the guide.
+        // Результат поиска передач: OK работает как в программе канала.
+        val found = cat.progs?.getOrNull(chanSel)
+        if (found != null) {
+            host.programmeOk(ch, found)
+            return
+        }
         if (sameChannel(playing, ch) && !playFailed) {
             playCat = cat; playPos = chanSel
             fullscreen = true
@@ -442,7 +570,15 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
     fun longOk() {
         keyMode = true
         if (!fullscreen) {
-            if (column == Pane.CHANNELS) channelMenu() else groupMenu()
+            when (column) {
+                Pane.CHANNELS -> channelMenu()
+                Pane.GROUPS -> groupMenu()
+                Pane.GUIDE -> {
+                    val ch = guideCh
+                    val p = guide.getOrNull(guideSel)
+                    if (ch != null && p != null) host.openProgrammeMenu(ch, p, false)
+                }
+            }
         }
         host.navChanged()
     }
@@ -450,7 +586,9 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
     private fun channelMenu() {
         val cat = shown ?: return
         val ch = cat.channels.getOrNull(chanSel) ?: return
-        host.openChannelMenu(ch, cat.id == Catalog.groupId(ch.group))
+        val found = cat.progs?.getOrNull(chanSel)
+        if (found != null) host.openProgrammeMenu(ch, found, true)
+        else host.openChannelMenu(ch, cat.id == Catalog.groupId(ch.group))
     }
 
     private fun groupMenu() {
@@ -473,6 +611,7 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
     fun back() {
         when {
             fullscreen -> fold()
+            column == Pane.GUIDE -> column = Pane.CHANNELS
             column == Pane.CHANNELS -> toGroups()
             playing != null -> clearPlayback()
             else -> {
@@ -560,5 +699,27 @@ class Nav(private val host: NavHost, startInKeyMode: Boolean) {
     }
 
     // Where the cursor is, for the log / Где курсор, для журнала
-    fun place(): String = if (fullscreen) "full" else if (column == Pane.GROUPS) "groups" else "channels"
+    fun place(): String = if (fullscreen) "full" else when (column) {
+        Pane.GROUPS -> "groups"
+        Pane.CHANNELS -> "channels"
+        Pane.GUIDE -> "guide"
+    }
+
+    // Touch: a programme of the guide / Сенсор: передача в программе
+    fun tapGuide(i: Int, hold: Boolean) {
+        val ch = guideCh ?: return
+        val p = guide.getOrNull(i) ?: return
+        keyMode = false
+        column = Pane.GUIDE
+        guideSel = i
+        if (hold) host.openProgrammeMenu(ch, p, false) else host.programmeOk(ch, p)
+        host.navChanged()
+    }
+
+    // The guide of the channel under the cursor (menu "TV guide of the channel", phone).
+    // Программа канала под курсором (пункт меню «Программа канала», телефон).
+    fun showGuide() {
+        openGuide()
+        host.navChanged()
+    }
 }
