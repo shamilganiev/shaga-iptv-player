@@ -20,8 +20,10 @@ The app contains no channels: you add a link to a playlist you are allowed to us
 |---|---|
 | `roku/` | Roku app (BrightScript, SceneGraph) |
 | `lg/` | LG webOS app (HTML/JS) |
+| `android/` | Android app (Kotlin, Compose): Android TV / Google TV and phones |
 | `docs/` | GitHub Pages: privacy policy, test playlist for store reviewers |
-| `SPEC.md` | Shared behaviour spec for both apps (in Russian) / Общая спецификация |
+| `SPEC.md` | Общая спецификация всех трёх приложений (на русском, главная) / Shared behaviour spec for all three apps (Russian, main) |
+| `SPEC.en.md` | Shared behaviour spec for all three apps (English translation) / Та же спецификация на английском |
 
 ## Install on Roku (developer mode) / Установка на Roku
 
