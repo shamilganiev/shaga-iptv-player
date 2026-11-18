@@ -11,6 +11,8 @@ var Browser = {
   gid: '__all',
   memory: {},        // gid -> на каком канале стояли в этой группе
   progCh: null,      // канал, чья программа открыта в третьей колонке
+  progFrom: 0,       // 1.5.0: начало списка передач (мс) / start of the programme list
+  descTimer: null,
   acceptsDigits: true,
 
   init: function () {
@@ -151,6 +153,14 @@ var Browser = {
       row.innerHTML = '<span class="p-time"></span><span class="p-title"></span>';
       row._p = { time: row.children[0], title: row.children[1] };
     }
+    // 1.5.0: строка «Загрузить ещё сутки» / the "Load one more day" row
+    row.classList.toggle('more', !!p.more);
+    if (p.more) {
+      row._p.time.textContent = '';
+      marquee(row._p.title, p.t, false);
+      row.classList.remove('past', 'cur', 'playing');
+      return;
+    }
     var now = Date.now(), cur = p.s <= now && now < p.e;
     row._p.time.textContent = (cur ? '> ' : '') + Browser.dayPrefix(p.s) + EPG.hm(p.s);
     marquee(row._p.title, p.t, row.classList.contains('focus'));
@@ -159,12 +169,15 @@ var Browser = {
     row.classList.toggle('playing', Browser.isPlaying() && Player.isCurrent(Browser.progCh) && Browser.isPlayingProg(p));
   },
 
+  // «вчера » / «завтра » / ''; 1.5.0: более старые дни — «пт 11/13 »
   dayPrefix: function (ms) {
-    var a = new Date(ms), b = new Date();
-    var da = a.getFullYear() * 400 + a.getMonth() * 32 + a.getDate();
-    var db = b.getFullYear() * 400 + b.getMonth() * 32 + b.getDate();
+    var a = new Date(ms), b = new Date(), y = new Date(Date.now() - 86400000);
+    var dn = function (d) { return d.getFullYear() * 400 + d.getMonth() * 32 + d.getDate(); };
+    var da = dn(a), db = dn(b), p2 = function (n) { return (n < 10 ? '0' : '') + n; };
     if (da === db) return '';
-    return (da < db ? t('yesterday') : t('tomorrow')) + ' ';
+    if (da > db) return t('tomorrow') + ' ';
+    if (da === dn(y)) return t('yesterday') + ' ';
+    return (t('wdays').split(',')[a.getDay()] || '') + ' ' + p2(a.getMonth() + 1) + '/' + p2(a.getDate()) + ' ';
   },
 
   // ---------- Заголовки ----------
@@ -232,6 +245,18 @@ var Browser = {
     $('iBar').style.width = Math.round(EPG.progress(p) * 100) + '%';
     $('iDesc').textContent = p.d || '';
     $('iDesc').style.display = p.d ? '' : 'none';
+    // 1.5.0: описания в памяти нет — скачиваем из файла, когда курсор остановился
+    var self = this;
+    clearTimeout(this.descTimer);
+    if (!p.d && !p.dTried && p.o != null && EPG.ranges) {
+      this.descTimer = setTimeout(function () {
+        p.dTried = true;
+        EPG.fullDesc(p).then(function () {
+          var c = self.chans.items.length ? self.chans.current() : null;
+          if (p.d && c === ch && self.panel !== 'prog' && !self.peek) self.drawInfo();
+        });
+      }, 700);
+    }
 
     var next = EPG.next(ch, p.d ? 4 : 8), box = $('iNext');
     box.innerHTML = '';
@@ -255,10 +280,10 @@ var Browser = {
   },
 
   // ---------- Программа канала (вправо из списка каналов) ----------
-  // want — передача, на которую поставить курсор (иначе — та, что в эфире)
-  openGuide: function (ch, want) {
-    var list = EPG.all(ch);
-    if (!list.length) {
+  // want — передача, на которую поставить курсор (иначе — та, что в эфире).
+  // 1.5.0: from — начало списка (0 — последние сутки); keepS — «Загрузить ещё»: курсор над этой передачей
+  openGuide: function (ch, want, from, keepS) {
+    if (!EPG.all(ch).length) {
       Log.info('Программа канала пуста: EPG ' + EPG.state);
       var why = EPG.state === 'ready' ? t('epgNone') : EPG.state === 'nourl' ? t('epgNoSource')
         : EPG.state === 'error' ? t('epgError') : t('epgLoading');
@@ -266,15 +291,37 @@ var Browser = {
       return;
     }
     this.progCh = ch;
-    var now = Date.now(), at = 0;
-    for (var i = 0; i < list.length; i++) { if (list[i].s <= now) at = i; else break; }
-    if (want) for (var k = 0; k < list.length; k++) if (want(list[k])) { at = k; break; }
+    var list = this.guideList(ch, from), now = Date.now(), at = list[0].more ? 1 : 0;
+    for (var i = at; i < list.length; i++) { if (list[i].s <= now) at = i; else break; }
+    if (want) for (var k = 0; k < list.length; k++) if (!list[k].more && want(list[k])) { at = k; break; }
+    if (keepS) {
+      for (var j = 0; j < list.length; j++) if (list[j].s === keepS) { at = j - 1; break; }
+      if (at < 0 || list[at].more) at = Math.min(list.length - 1, at + 1);
+    }
     this.peek = false;
     this.showGuideNodes(true);
     this.progs.setItems(list, at);
     this.focusPanel('prog');
     this.drawProgDesc();
     this.drawHeads();
+  },
+
+  // 1.5.0: список передач с from; если есть более старые — первая строка «Загрузить ещё сутки»
+  guideList: function (ch, from) {
+    var r = EPG.range(ch, from);
+    this.progFrom = r.from;
+    var list = r.list;
+    if (r.more) list = [{ more: true, t: t('loadMore') }].concat(list);
+    if (!list.length) list = EPG.all(ch);
+    return list;
+  },
+
+  // 1.5.0: ещё сутки назад; курсор встаёт над прежней первой передачей
+  loadMore: function () {
+    var first = this.progs.items[1];
+    if (!this.progCh || !first) return;
+    Log.info('UI программа: ещё сутки назад');
+    this.openGuide(this.progCh, null, this.progFrom - EPG.DAY, first.s);
   },
 
   closeGuide: function () {
@@ -297,6 +344,7 @@ var Browser = {
 
   drawProgDesc: function () {
     var p = this.progs.current();
+    if (p && p.more) { $('progDesc').textContent = t('loadMoreHint'); return; }
     $('progDesc').textContent = p ? (EPG.hm(p.s) + ' – ' + EPG.hm(p.e) + (p.d ? '   ' + p.d : '')) : '';
   },
 
@@ -306,6 +354,7 @@ var Browser = {
   actOnProgramme: function (p) {
     var ch = this.progCh;
     if (!p || !ch) return;
+    if (p.more) { this.loadMore(); return; }
     var now = Date.now(), cur = p.s <= now && now < p.e;
     if (Player.isCurrent(ch) && Player.state !== 'error' && Player.state !== 'idle') {
       var same = Player.arch ? Player.arch.s === Math.floor(p.s / 1000) : cur;
@@ -333,7 +382,9 @@ var Browser = {
   playLive: function (ch) {
     var self = this, w = this.listWith(ch);
     if (w.idx < 0) return;
-    App.guardPlay(ch, function () { Player.play(w.list, w.idx, w.gid); self.afterPlay(); });
+    // 1.5.0: первый OK сразу открывает полный экран; OK там сворачивает на эту же строку
+    var from = this.panel === 'prog' ? 'prog' : 'channels';
+    App.guardPlay(ch, function () { Player.play(w.list, w.idx, w.gid); self.afterPlay(); self.fullFrom = from; App.show('player'); });
   },
 
   afterPlay: function () {
@@ -359,8 +410,9 @@ var Browser = {
     }
     var w = this.listWith(ch);
     if (w.idx < 0) return;
+    var from = this.panel === 'prog' ? 'prog' : 'channels';
     App.guardPlay(ch, function () {
-      if (Player.playArchive(w.list, w.idx, w.gid, p, 0)) self.afterPlay();
+      if (Player.playArchive(w.list, w.idx, w.gid, p, 0)) { self.afterPlay(); self.fullFrom = from; App.show('player'); }
     });
   },
 
@@ -392,7 +444,7 @@ var Browser = {
     var self = this, items = [], now = Date.now();
     if (this.panel === 'prog') {
       var p = this.progs.current();
-      if (!p) return;
+      if (!p || p.more) return;
       items.push({ label: t('ctxDesc'), action: function () { self.showDescription(p); } });
       if (p.s <= now) items.push({ label: t('ctxWatch'), action: function () { self.actOnProgramme(p); } });
       items.push({ label: t('cancel') });
@@ -407,14 +459,15 @@ var Browser = {
       if (fp) {
         items.push({ label: t('ctxDesc'), action: function () { self.showDescription(fp); } });
         if (fp.s <= now) items.push({ label: t('ctxWatch'), action: function () { self.actOnFound(fi); } });
-        items.push({ label: t(App.isFav(ch) ? 'ctxFavRemove' : 'ctxFavAdd'),
+        if (!App.isAdultGroup(ch.group)) items.push({ label: t(App.isFav(ch) ? 'ctxFavRemove' : 'ctxFavAdd'),
                      action: function () { App.toggleFav(ch); self.refreshCounts(); } });
         items.push({ label: t('ctxGoGroup'), action: function () { self.goToChannelGroup(ch); } });
         items.push({ label: t('cancel') });
         Menu.open(fp.t, '', items);
         return;
       }
-      items.push({ label: t(App.isFav(ch) ? 'ctxFavRemove' : 'ctxFavAdd'),
+      // 1.5.0: каналы групп 18+ в Избранное не попадают
+      if (!App.isAdultGroup(ch.group)) items.push({ label: t(App.isFav(ch) ? 'ctxFavRemove' : 'ctxFavAdd'),
                    action: function () { App.toggleFav(ch); self.refreshCounts(); } });
       items.push({ label: t('ctxDesc'), action: function () {
         if (cur) self.showDescription(cur);
@@ -596,8 +649,9 @@ var Browser = {
     this.panel = null;
     this.focusPanel(panel);
     if (backProg && this.chans.items.length && Player.isCurrent(this.chans.current())) {
-      var self = this;
-      this.openGuide(backProg, function (p) { return self.isPlayingProg(p); });
+      var self = this, as = Player.arch ? Player.arch.s * 1000 : 0;
+      this.openGuide(backProg, function (p) { return self.isPlayingProg(p); },
+        as && as < Date.now() - EPG.DAY + 3 * 3600000 ? as - 3 * 3600000 : 0);
     }
     this.drawHeads();
   },
@@ -712,7 +766,8 @@ var Browser = {
   peekGuide: function (i) {
     var ch = this.chans.items[i], p = App.find && App.find.progs[i];
     if (!ch || !p) return;
-    var list = EPG.all(ch), at = list.indexOf(p);
+    // 1.5.0: передача старше суток — список начинается чуть раньше неё
+    var list = this.guideList(ch, p.s < Date.now() - EPG.DAY + 3 * 3600000 ? p.s - 3 * 3600000 : 0), at = list.indexOf(p);
     if (at < 0) for (var k = 0; k < list.length; k++) if (list[k].s === p.s) { at = k; break; }
     this.progCh = ch;
     this.peek = true;

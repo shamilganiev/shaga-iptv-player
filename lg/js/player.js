@@ -18,6 +18,7 @@ var Player = {
   state: 'idle',   // idle | loading | playing | error
   suspended: false,
   stallTimer: null,
+  bufTimer: null,
   bannerTimer: null,
   acceptsDigits: true,
   STALL_MS: 45000,
@@ -28,6 +29,14 @@ var Player = {
   // Архив: свои часы — позиция у shift/catchup-потоков идёт по часам, а не по кадрам.
   // { s, e (секунды UTC), t (название), base (сек от начала передачи), acc, run, since }
   arch: null,
+  // 1.5.0: присмотр за архивом: перезапуск при ошибке и буферизации > 25 с (до 3 раз подряд),
+  // следующая передача, когда закончилась текущая
+  archRetry: 0,     // перезапусков подряд
+  archEver: false,  // архив хоть раз пошёл (иначе его просто нет)
+  archAuto: false,  // следующий playArchive — перезапуск/перемотка, а не новый выбор
+  archOkAt: 0,      // когда картинка пошла в последний раз
+  errText: '',      // своя строка ошибки на плашке
+  BUF_MS: 25000,
 
   HLS_CONFIG: {
     enableWorker: true,
@@ -66,9 +75,23 @@ var Player = {
       }
       self.waitT = 0;
       clearTimeout(self.spinTimer);
+      clearTimeout(self.bufTimer);
+      if (self.arch) { self.archEver = true; self.archOkAt = Date.now(); }
       self.clockRun();
       self.setState('playing');
     });
+    // 1.5.0: поток архива закончился: в конце передачи — следующая, иначе перезапуск
+    v.addEventListener('ended', function () {
+      var a = self.arch;
+      if (!a || !self.ch) return;
+      if (self.archPos() >= a.e - a.s - 120) self.nextProgramme(true);
+      else self.archRestart('поток закончился');
+    });
+    // Каждые 10 с: архивная передача кончилась — следующая (подписи; сам поток идёт дальше)
+    setInterval(function () {
+      var a = self.arch;
+      if (a && self.state === 'playing' && !self.waitT && self.archPos() >= a.e - a.s) self.nextProgramme(false);
+    }, 10000);
     v.addEventListener('pause', function () { self.clockStop(); });
 
     // Значок загрузки — только если пауза дольше 0,7 с: короткие подвисания не мелькают
@@ -80,6 +103,11 @@ var Player = {
         self.spinTimer = setTimeout(function () {
           if (self.waitT) $('vspin').classList.add('on');
         }, 700);
+        // 1.5.0: архив стоит 25 с — перезапуск с того же места
+        clearTimeout(self.bufTimer);
+        if (self.arch) self.bufTimer = setTimeout(function () {
+          if (self.waitT && self.arch) self.archRestart('буферизация 25 с');
+        }, self.BUF_MS);
       }
     });
 
@@ -149,6 +177,7 @@ var Player = {
     this.ch = ch;
     this.suspended = false;
     this.waitT = 0;
+    this.errText = '';
     this.stages = {};
     this.hlsRetries = 0;
     if (!this.arch) {                     // последний канал запоминается только для эфира
@@ -241,6 +270,9 @@ var Player = {
     var s = Math.floor(prog.s / 1000), e = Math.floor(prog.e / 1000), now = Math.floor(Date.now() / 1000);
     offset = offset || 0;
     var url = Catchup.url(ch.url, info, s + offset, e, now);
+    // Новая передача (выбрана или следующая): перезапуски считаются заново
+    if (!this.archAuto) { this.archRetry = 0; this.archEver = false; }
+    this.archAuto = false;
     this.list = list;
     this.idx = idx;
     this.gid = gid;
@@ -273,7 +305,51 @@ var Player = {
     var now = Math.floor(Date.now() / 1000), p = this.archPos() + delta;
     var maxP = Math.min(a.e - a.s - 30, now - 30 - a.s);
     p = Math.max(0, Math.min(p, maxP));
+    this.archAuto = true;    // та же передача — не новый выбор
     this.playArchive(this.list, this.idx, this.gid, { s: a.s * 1000, e: a.e * 1000, t: a.t }, p);
+  },
+
+  // 1.5.0: перезапуск архива с того же места, до 3 раз подряд (счёт сбрасывается после 2 минут
+  // нормального показа). Передача, которая так и не пошла, не перезапускается — её архива нет.
+  archRestart: function (why) {
+    if (!this.arch || !this.archEver) return false;
+    if (Date.now() - this.archOkAt > 120000) this.archRetry = 0;
+    if (this.archRetry >= 3) { Log.warn('Архив: ' + why + ' — 3 перезапуска не помогли'); return false; }
+    this.archRetry++;
+    Log.info('Архив: ' + why + ' — перезапуск ' + this.archRetry + '/3 с +' + this.archPos() + ' с');
+    this.seekArchive(0);
+    return true;
+  },
+
+  // 1.5.0: следующая передача после архивной. play — поток закончился, включить её;
+  // иначе поток идёт дальше сам (shift), меняются только подписи, часы продолжают идти.
+  nextProgramme: function (play) {
+    var a = this.arch, ch = this.ch;
+    if (!a || !ch) return;
+    var list = EPG.all(ch), nx = null;
+    for (var i = 0; i < list.length; i++) if (list[i].s >= a.e * 1000 - 60000) { nx = list[i]; break; }
+    if (!nx) { if (play) Log.info('Архив: следующей передачи в программе нет'); return; }
+    if (play) {
+      Log.info('Архив: следующая передача «' + nx.t + '»');
+      if (nx.s >= Date.now() - 60000) this.start(ch);
+      else this.playArchive(this.list, this.idx, this.gid, nx, 0);
+      return;
+    }
+    var ns = Math.floor(nx.s / 1000);
+    a.base -= ns - a.s;
+    a.s = ns;
+    a.e = Math.floor(nx.e / 1000);
+    a.t = nx.t;
+    Log.info('Архив: теперь «' + nx.t + '» ' + EPG.hm(nx.s) + '–' + EPG.hm(nx.e));
+    this.drawBanner();
+    if (App.screen === Browser) Browser.afterPlay();
+  },
+
+  // 1.5.0: кнопка Stop — перезапуск потока (эфир) или архива с того же места
+  restart: function () {
+    if (!this.ch) return;
+    if (this.arch) { Log.info('Архив: перезапуск по кнопке'); this.archRetry = 0; this.archAuto = true; this.seekArchive(0); }
+    else { Log.info('Перезапуск потока по кнопке'); this.start(this.ch); }
   },
 
   mmss: function (sec) {
@@ -287,6 +363,7 @@ var Player = {
     this.clockStop();
     clearTimeout(this.stallTimer);
     clearTimeout(this.spinTimer);
+    clearTimeout(this.bufTimer);
     this.waitT = 0;
     if (this.hls) {
       try { this.hls.destroy(); } catch (e) {}
@@ -302,6 +379,9 @@ var Player = {
 
   fail: function () {
     clearTimeout(this.stallTimer);
+    if (this.arch && this.archRestart('ошибка')) return;
+    // Архив: так и не пошёл — его нет; шёл и оборвался — прервался
+    this.errText = this.arch ? t(this.archEver ? 'archBroken' : 'archNoStart') : '';
     this.setState('error');
     this.fireStarted();
   },
@@ -363,7 +443,7 @@ var Player = {
     var st = $('bStatus');
     st.classList.toggle('err', this.state === 'error');
     st.textContent = this.state === 'loading' ? t('stConnecting')
-      : this.state === 'error' ? t('stError') : '';
+      : this.state === 'error' ? (this.errText || t('stError')) : '';
   },
 
   // sticky = не прятать (подключение, ошибка)
@@ -427,7 +507,7 @@ var Player = {
       case K.PLAY: if (this.video.paused) { var pp = this.video.play(); if (pp && pp.catch) pp.catch(function () {}); } this.showBanner(); return true;
       case K.YELLOW: if (this.ch) { App.toggleFav(this.ch); this.drawBanner(); this.showBanner(); } return true;
       case K.BLUE: App.show('settings'); return true;
-      case K.STOP: this.stop(); App.show('browser'); return true;
+      case K.STOP: this.restart(); return true;     // 1.5.0: Stop — перезапуск потока
     }
     return false;
   }

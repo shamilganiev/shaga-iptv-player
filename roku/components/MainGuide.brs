@@ -29,6 +29,9 @@ sub guideInit()
     m.descOpen = false
     m.descItem = invalid
     m.descKey = ""
+    m.guideFrom = 0         ' 1.5.0: start of the list asked by openGuide (0 = last 24 h) / начало списка
+    m.progFrom = 0          ' start of the list on screen / начало списка на экране
+    m.progKeepS = 0         ' "Load more": programme to keep the cursor near / передача, у которой держать курсор
 end sub
 
 ' ---------- programme list / список передач ----------
@@ -43,7 +46,11 @@ sub openGuide(ix as integer)
         return
     end if
     m.progIx = ix
-    m.epgSvc.listKey = epgKeyOf(m.channels[ix])
+    ' 1.5.0: the last 24 h by default; a search result can ask for an older start
+    ' 1.5.0: по умолчанию — последние сутки; результат поиска может попросить начало раньше
+    m.progKeepS = 0
+    m.epgSvc.listReq = { key: epgKeyOf(m.channels[ix]), from: m.guideFrom }
+    m.guideFrom = 0
     if not m.findPeek then dbg("UI", "TV guide of #" + (ix + 1).ToStr())
 end sub
 
@@ -52,7 +59,13 @@ sub onEpgList()
     if m.progIx < 0 or d = invalid or m.channels = invalid then return
     if d.key <> epgKeyOf(m.channels[m.progIx]) then return
     m.progItems = d.items
-    if m.progItems.Count() = 0 then
+    m.progFrom = d.from
+    ' 1.5.0: older days are kept: the first row loads one more day / есть старые дни: первая строка добавляет сутки
+    if d.more = true then
+        m.progItems = [{ more: true, s: 0, e: 0, t: m.S.loadMore, d: "" }]
+        m.progItems.Append(d.items)
+    end if
+    if d.items.Count() = 0 then
         msg = m.S.epgNone
         if m.epgStatus.state = "loading" then msg = m.S.epgLoading
         dbg("UI", "TV guide empty: " + m.epgStatus.state)
@@ -66,13 +79,16 @@ sub onEpgList()
     for i = 0 to m.progItems.Count() - 1
         it = m.progItems[i]
         mark = "   "
-        if it.s <= now and now < it.e then
+        if it.DoesExist("more") then
+            items.push({ title: it.t, playing: false })
+            cur = i + 1
+        else if it.s <= now and now < it.e then
             mark = "> "
             cur = i
         else if it.e <= now then
             cur = i + 1
         end if
-        items.push({ title: mark + dayPrefix(it.s) + hhmm(it.s) + "   " + it.t, playing: false })
+        if not it.DoesExist("more") then items.push({ title: mark + dayPrefix(it.s) + hhmm(it.s) + "   " + it.t, playing: false })
     end for
     if cur >= items.Count() then cur = items.Count() - 1
     root = CreateObject("roSGNode", "ContentNode")
@@ -91,6 +107,19 @@ sub onEpgList()
         end for
         m.findWant = 0
         centerProgramme(cur, items.Count())
+    else if m.progKeepS > 0 then
+        ' "Load more": the cursor on the last programme of the added day, right above the old first one
+        ' «Загрузить ещё»: курсор на последней передаче добавленных суток, прямо над прежней первой
+        for i = 0 to m.progItems.Count() - 1
+            if m.progItems[i].s = m.progKeepS then
+                cur = i - 1
+                exit for
+            end if
+        end for
+        if cur < 0 then cur = 0
+        if m.progItems[cur].DoesExist("more") and cur + 1 < m.progItems.Count() then cur = cur + 1
+        m.progKeepS = 0
+        m.progList.jumpToItem = cur
     else
         m.progList.jumpToItem = cur
     end if
@@ -125,6 +154,10 @@ end sub
 sub onProgFocused()
     i = m.progList.itemFocused
     if i < 0 or i >= m.progItems.Count() then return
+    if m.progItems[i].DoesExist("more") then
+        m.progDesc.text = m.S.loadMoreHint
+        return
+    end if
     ' Full title first (the list cuts long ones), then the description / Сначала полное название, потом описание
     d = m.progItems[i].t
     if m.progItems[i].d <> "" then d = d + ". " + m.progItems[i].d
@@ -141,6 +174,10 @@ end sub
 ' OK on a programme / OK на передаче
 sub actOnProgramme(it as object)
     if m.progIx < 0 then return
+    if it.DoesExist("more") then
+        loadMoreGuide()
+        return
+    end if
     now = CreateObject("roDateTime").AsSeconds()
     ' Second OK on what is already playing: full screen (like a second OK on a channel)
     ' Повторный OK на том, что уже играет, — полный экран (как повторный OK на канале)
@@ -158,7 +195,7 @@ sub actOnProgramme(it as object)
         end if
     end if
     if it.s <= now and now < it.e then
-        playChannel(m.progIx)
+        playChannelFull(m.progIx)     ' 1.5.0: the full screen at once / сразу полный экран
     else if it.e <= now then
         info = archiveInfo(m.channels[m.progIx], currentArchive())
         if info = invalid then
@@ -167,6 +204,7 @@ sub actOnProgramme(it as object)
             showInfoDialog(it.t, [m.S.archNotSet])
         else if archiveCovers(info, it.s, now) then
             playArchiveAt(m.progIx, it.s, it.e, it.t, 0)
+            enterFull()
         else
             dbg("UI", "programme is older than the archive depth")
             showInfoDialog(it.t, [m.S.archUnavailable])
@@ -176,7 +214,18 @@ sub actOnProgramme(it as object)
     end if
 end sub
 
-' "yesterday " / "tomorrow " / "" by the local date / по местной дате
+' 1.5.0: one more day back: the cursor stays above the old first programme
+' 1.5.0: ещё сутки назад: курсор встаёт над прежней первой передачей
+sub loadMoreGuide()
+    if m.progIx < 0 or m.progItems.Count() < 2 then return
+    m.progKeepS = m.progItems[1].s
+    m.findPeek = false
+    dbg("UI", "TV guide: one more day back")
+    m.epgSvc.listReq = { key: epgKeyOf(m.channels[m.progIx]), from: m.progFrom - 86400 }
+end sub
+
+' "yesterday " / "tomorrow " / "" by the local date; 1.5.0: older days — "Fri 11/13 "
+' «вчера » / «завтра » / "" по местной дате; 1.5.0: более старые дни — «пт 11/13 »
 function dayPrefix(secs as integer) as string
     a = CreateObject("roDateTime")
     a.FromSeconds(secs)
@@ -186,8 +235,15 @@ function dayPrefix(secs as integer) as string
     da = a.GetYear() * 400 + a.GetMonth() * 32 + a.GetDayOfMonth()
     db = b.GetYear() * 400 + b.GetMonth() * 32 + b.GetDayOfMonth()
     if da = db then return ""
-    if da < db then return m.S.yesterday + " "
-    return m.S.tomorrow + " "
+    if da > db then return m.S.tomorrow + " "
+    y = CreateObject("roDateTime")
+    y.FromSeconds(b.AsSeconds() - 86400)
+    dy = y.GetYear() * 400 + y.GetMonth() * 32 + y.GetDayOfMonth()
+    if da = dy then return m.S.yesterday + " "
+    wd = m.S.wdays.Split(",")
+    w = ""
+    if a.GetDayOfWeek() < wd.Count() then w = wd[a.GetDayOfWeek()] + " "
+    return w + epgPad2(a.GetMonth()) + "/" + epgPad2(a.GetDayOfMonth()) + " "
 end function
 
 ' 1.3.4: own wide window. The short text from memory is shown at once, the full one
@@ -222,7 +278,9 @@ end sub
 
 sub onDescAns()
     a = m.epgSvc.descAns
-    if a = invalid or m.descItem = invalid or a.key <> m.descKey or a.s <> m.descItem.s then return
+    if a = invalid then return
+    autoDescArrived(a)      ' 1.5.0: the column under the video / колонка под видео
+    if m.descItem = invalid or a.key <> m.descKey or a.s <> m.descItem.s then return
     d = a.d
     first = d.Left(60).Replace(Chr(10), " ")
     if d = "" then first = "(no description)"
@@ -281,6 +339,7 @@ sub openContextMenu()
         i = m.progList.itemFocused
         if i < 0 or i >= m.progItems.Count() then return
         it = m.progItems[i]
+        if it.DoesExist("more") then return
         acts = [{ a: "progdesc", t: m.S.ctxDesc }]
         now = CreateObject("roDateTime").AsSeconds()
         if it.s <= now then acts.push({ a: "watch", t: m.S.ctxWatch })
@@ -298,20 +357,25 @@ sub openContextMenu()
             acts = [{ a: "progdesc", t: m.S.ctxDesc }]
             now = CreateObject("roDateTime").AsSeconds()
             if it.s <= now then acts.push({ a: "watch", t: m.S.ctxWatch })
-            if m.favSet.DoesExist(ch.t) then
-                acts.push({ a: "fav", t: m.S.ctxFavRemove })
-            else
-                acts.push({ a: "fav", t: m.S.ctxFavAdd })
+            if not groupIsAdult(m.data, ch.g) then
+                if m.favSet.DoesExist(ch.t) then
+                    acts.push({ a: "fav", t: m.S.ctxFavRemove })
+                else
+                    acts.push({ a: "fav", t: m.S.ctxFavAdd })
+                end if
             end if
             acts.push({ a: "group", t: m.S.ctxGoGroup })
             showContext(it.t, acts, { ix: ix, item: it, key: epgKeyOf(ch) })
             return
         end if
         acts = []
-        if m.favSet.DoesExist(ch.t) then
-            acts.push({ a: "fav", t: m.S.ctxFavRemove })
-        else
-            acts.push({ a: "fav", t: m.S.ctxFavAdd })
+        ' 1.5.0: channels of 18+ groups do not go to Favorites / каналы групп 18+ в Избранное не попадают
+        if not groupIsAdult(m.data, ch.g) then
+            if m.favSet.DoesExist(ch.t) then
+                acts.push({ a: "fav", t: m.S.ctxFavRemove })
+            else
+                acts.push({ a: "fav", t: m.S.ctxFavAdd })
+            end if
         end if
         acts.push({ a: "desc", t: m.S.ctxDesc })
         acts.push({ a: "guide", t: m.S.ctxGuide })
@@ -359,7 +423,10 @@ sub onContextButton(b as integer, ctx as object)
         openGuide(ctx.ix)
     else if a = "start" then
         pr = epgNowOf(ctx.ix)
-        if pr <> invalid then playArchiveAt(ctx.ix, pr.s, pr.e, pr.t, 0)
+        if pr <> invalid then
+            playArchiveAt(ctx.ix, pr.s, pr.e, pr.t, 0)
+            enterFull()
+        end if
     else if a = "group" then
         goToChannelGroup(ctx.ix)
     else if a = "progdesc" then

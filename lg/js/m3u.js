@@ -61,6 +61,8 @@ var M3U = (function () {
           tvgId: a['tvg-id'] || '',
           catchup: '', catchupDays: 0, catchupSource: ''
         };
+        // 1.5.0: tvg-name — имя для поиска канала в программе (храним, только если отличается)
+        if (a['tvg-name'] && a['tvg-name'] !== cur.name) cur.tvgName = a['tvg-name'];
         var cu = catchupOf(a) || hdrCatch;
         if (cu) { cur.catchup = cu.t; cur.catchupDays = cu.d; cur.catchupSource = cu.src; }
         extgrp = '';

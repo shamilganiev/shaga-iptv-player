@@ -7,7 +7,7 @@
 //   flussonic  .../name.m3u8 -> .../name-НАЧАЛО-ДЛИТЕЛЬНОСТЬ.m3u8 ; /mpegts -> /timeshift_abs-НАЧАЛО.ts
 //   xc         Xtream: /live/user/pass/ID.ext -> /timeshift/user/pass/МИНУТЫ/YYYY-MM-DD:HH-MM/ID.ts
 // Подстановки: {utc} {start} ${start} {utcend} {end} ${end} {duration} ${duration}
-//   {lutc} {now} ${now} {timestamp} {offset} ${offset} {Y} {m} {d} {H} {M} {S}
+//   {lutc} {now} ${now} {timestamp} ${timestamp} {offset} ${offset} {Y} {m} {d} {H} {M} {S}
 // Время — секунды UTC.
 var Catchup = {
 
@@ -51,7 +51,7 @@ var Catchup = {
       '${start}': start, '{utc}': start, '{start}': start,
       '${end}': finish, '{utcend}': finish, '{end}': finish,
       '${duration}': finish - start, '{duration}': finish - start,
-      '${now}': now, '{lutc}': now, '{now}': now, '{timestamp}': now,
+      '${now}': now, '{lutc}': now, '{now}': now, '${timestamp}': now, '{timestamp}': now,
       '${offset}': now - start, '{offset}': now - start,
       '{Y}': d.getUTCFullYear(), '{m}': p2(d.getUTCMonth() + 1), '{d}': p2(d.getUTCDate()),
       '{H}': p2(d.getUTCHours()), '{M}': p2(d.getUTCMinutes()), '{S}': p2(d.getUTCSeconds())

@@ -130,7 +130,14 @@ function playlistRowText() as string
         i = storageFindIndex(m.data, m.currentId)
         if i >= 0 then t = m.data.playlists[i].name
     end if
-    if m.playlistStale then t = t + "  ·  " + m.S.fromCache
+    ' 1.5.0: is the list fresh? / свежий ли список
+    if m.playlistStale then
+        t = t + "  ·  " + m.S.fromCache
+    else if m.playlistAt > 0 then
+        t = t + "  ·  " + m.S.plUpdated.Replace("{t}", hhmm(m.playlistAt))
+    else if m.channels <> invalid then
+        t = t + "  ·  " + m.S.plUpdating
+    end if
     return t
 end function
 
@@ -246,6 +253,8 @@ sub setArchive(t as string, d as integer)
     m.data.playlists[i].arch = { t: t, d: d }
     storageSave(m.data)
     dbg("UI", "archive " + t + " " + d.ToStr() + " days for " + m.currentId)
+    ' 1.5.0: the guide keeps as many days as the archive is deep / программа хранит столько дней, какова глубина архива
+    if m.channels <> invalid then epgRequestLoad(false)
     if m.view = "settings" then buildSettingsRows(1)
 end sub
 

@@ -8,7 +8,7 @@
 '   flussonic  .../name.m3u8 -> .../name-START-DURATION.m3u8 ; /mpegts -> /timeshift_abs-START.ts
 '   xc         Xtream: /live/user/pass/ID.ext -> /timeshift/user/pass/MINUTES/YYYY-MM-DD:HH-MM/ID.ts
 ' Placeholders / Подстановки: {utc} {start} ${start} {utcend} {end} ${end} {duration} ${duration}
-'   {lutc} {now} ${now} {timestamp} {offset} ${offset} {Y} {m} {d} {H} {M} {S}
+'   {lutc} {now} ${now} {timestamp} ${timestamp} {offset} ${offset} {Y} {m} {d} {H} {M} {S}
 ' Times are UTC seconds / Время — секунды UTC.
 
 ' Archive settings for a channel, or invalid. arch = playlist setting { t, d }.
@@ -68,7 +68,7 @@ function fillCatchup(tpl as string, start as integer, finish as integer, now as 
         ["${start}", start.ToStr()], ["{utc}", start.ToStr()], ["{start}", start.ToStr()]
         ["${end}", finish.ToStr()], ["{utcend}", finish.ToStr()], ["{end}", finish.ToStr()]
         ["${duration}", (finish - start).ToStr()], ["{duration}", (finish - start).ToStr()]
-        ["${now}", now.ToStr()], ["{lutc}", now.ToStr()], ["{now}", now.ToStr()], ["{timestamp}", now.ToStr()]
+        ["${now}", now.ToStr()], ["{lutc}", now.ToStr()], ["{now}", now.ToStr()], ["${timestamp}", now.ToStr()], ["{timestamp}", now.ToStr()]
         ["${offset}", (now - start).ToStr()], ["{offset}", (now - start).ToStr()]
         ["{Y}", dt.GetYear().ToStr()], ["{m}", catchPad(dt.GetMonth())], ["{d}", catchPad(dt.GetDayOfMonth())]
         ["{H}", catchPad(dt.GetHours())], ["{M}", catchPad(dt.GetMinutes())], ["{S}", catchPad(dt.GetSeconds())]

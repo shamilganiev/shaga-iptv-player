@@ -72,6 +72,7 @@ sub onDialogClosed()
     m.dlgCtx = invalid
     m.dialogOpen = false
     dbg("UI", "dialog " + kind + " closed by Back")
+    if kind = "findScan" then stopFindScan()
     restoreFocus()
 end sub
 
@@ -140,6 +141,11 @@ sub onDialogButton()
         onGroupModeButton(b, ctx)
     else if kind = "context" then
         onContextButton(b, ctx)
+    else if kind = "findDepth" then
+        onFindDepthButton(b, ctx)
+    else if kind = "findScan" then
+        ' "Stop": the window stays until the answer comes / «Остановить»: окно ждёт ответа
+        stopFindScan()
     else if kind = "archType" or kind = "archDays" then
         onArchDialogButton(kind, b, ctx)
     else

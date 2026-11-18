@@ -546,7 +546,9 @@ body.has-video #settings { background: rgba(20,28,46,.96); }
 #progBox { position: absolute; left: 0; right: 0; top: 84px; bottom: 0; }
 #progList { position: absolute; left: 0; right: 0; top: 0; height: 558px; }
 .p-row { padding: 0 18px; font-size: 25px; }
-.p-row .p-time { width: 190px; flex-shrink: 0; color: var(--muted); font-variant-numeric: tabular-nums; }
+.p-row.more .p-title { color: var(--amber); }
+.vrow.focus.p-row.more .p-title { color: var(--ink); }
+.p-row .p-time { width: 220px; flex-shrink: 0; color: var(--muted); font-variant-numeric: tabular-nums; }
 .p-row .p-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .p-row.past .p-title { color: #B4BCCF; }
 .p-row.cur .p-title, .p-row.cur .p-time { color: var(--amber); font-weight: 700; }

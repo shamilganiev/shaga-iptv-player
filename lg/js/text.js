@@ -64,7 +64,17 @@ var Text = {
     if (low.indexOf('://') < 0) s = 'https://' + s;
     else if (low.slice(0, 7) === 'http://') s = 'http://' + s.slice(7);
     else if (low.slice(0, 8) === 'https://') s = 'https://' + s.slice(8);
-    return s;
+    return this.dropboxDirect(s);
+  },
+
+  // 1.5.0: ссылка общего доступа Dropbox отдаёт веб-страницу, а не файл:
+  // www.dropbox.com -> dl.dropboxusercontent.com, без «dl=0» / «dl=1». Остальные ссылки не меняются.
+  dropboxDirect: function (s) {
+    var m = /^(https?:\/\/)(?:www\.)?dropbox\.com(\/.*)$/i.exec(s);
+    if (!m) return s;
+    var out = m[1] + 'dl.dropboxusercontent.com' + m[2];
+    out = out.replace(/([?&])dl=[01](&|$)/, function (_, a, b) { return b ? a : ''; });
+    return out;
   },
 
   isValidUrl: function (s) {

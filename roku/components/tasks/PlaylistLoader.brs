@@ -257,7 +257,8 @@ function pickEpgUrl(line as string, rxAttr as object) as string
     for each mt in rxAttr.MatchAll(line)
         k = LCase(mt[1])
         if k = "url-tvg" or k = "x-tvg-url" then
-            for each part in mt[2].Replace(",", " ").Split(" ")
+            ' 1.5.0: ";" separates links too / «;» тоже разделяет ссылки
+            for each part in mt[2].Replace(",", " ").Replace(";", " ").Split(" ")
                 low = LCase(part.Trim())
                 if low.Left(7) = "http://" or low.Left(8) = "https://" then return part.Trim()
             end for
@@ -283,6 +284,9 @@ function parseExtinf(line as string, rxAttr as object, rxTitle as object) as obj
     end if
     if a["group-title"] <> invalid then ch.g = a["group-title"].Trim()
     if a["tvg-id"] <> invalid and a["tvg-id"] <> "" then ch.id = a["tvg-id"]
+    ' 1.5.0: tvg-name is the name to find the channel in the TV guide by (kept only if it differs)
+    ' 1.5.0: tvg-name — имя для поиска канала в программе (храним, только если отличается)
+    if a["tvg-name"] <> invalid and a["tvg-name"] <> "" and a["tvg-name"] <> title then ch.tn = a["tvg-name"]
     if a["user-agent"] <> invalid then ch.ua = a["user-agent"]
     if a["http-user-agent"] <> invalid then ch.ua = a["http-user-agent"]
     if a["http-referrer"] <> invalid then ch.rf = a["http-referrer"]

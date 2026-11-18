@@ -26,7 +26,9 @@ sub epgLoop()
     m.port = CreateObject("roMessagePort")
     m.top.observeField("cmd", m.port)
     m.top.observeField("detailKey", m.port)
-    m.top.observeField("listKey", m.port)
+    m.top.observeField("listReq", m.port)
+    m.top.observeField("findStop", m.port)
+    m.top.observeField("nextReq", m.port)
     m.top.observeField("descReq", m.port)
     m.top.observeField("findReq", m.port)
     m.rangesOk = false      ' the server gives byte ranges / сервер отдаёт куски файла
@@ -34,6 +36,12 @@ sub epgLoop()
     m.fileSize = 0
     m.url = ""
     m.keys = {}
+    m.depth = {}            ' 1.5.0: channel key -> archive days / глубина архива канала
+    m.loadedBack = 0        ' seconds back kept by the last parse / сколько секунд назад сохранил разбор
+    m.scanning = false      ' description search reads the file / поиск в описаниях читает файл
+    m.findCancel = false
+    m.descTried = {}        ' "fid|s" -> true: full description already asked / уже запрошено
+    m.progText = ""         ' "60/190" MB while downloading / МБ по ходу загрузки
     m.progs = {}
     m.keyToFile = {}
     m.loadedAt = 0
@@ -79,11 +87,16 @@ sub handleEvent(msg as object)
         end if
     else if f = "detailKey" then
         answerDetail(msg.getData())
-    else if f = "listKey" then
+    else if f = "listReq" then
         answerList(msg.getData())
+    else if f = "findStop" then
+        m.findCancel = true
+    else if f = "nextReq" then
+        answerNext(msg.getData())
     else if f = "descReq" then
         answerDesc(msg.getData())
     else if f = "findReq" then
+        if m.scanning then return      ' one search at a time / один поиск за раз
         answerFind(msg.getData())
     end if
 end sub
@@ -102,6 +115,8 @@ sub handleCmd(c as dynamic)
     if c = invalid or c.action <> "load" then return
     m.keys = c.keys
     if m.keys = invalid then m.keys = {}
+    m.depth = c.depth
+    if m.depth = invalid then m.depth = {}
     m.url = c.url
     if m.url = invalid then m.url = ""
     if m.url = "" then
@@ -122,16 +137,30 @@ sub handleCmd(c as dynamic)
         m.lastMinute = -1
         publishNow()
         setStatus("ready", "")
+        checkBack()
         return
     end if
-    if c.force <> true and loadFromCache() then return
+    if c.force <> true and loadFromCache() then
+        checkBack()
+        return
+    end if
     loadFromNetwork()
+end sub
+
+' 1.5.0: a deeper archive than the programme in memory (setting changed): download again in the background
+' 1.5.0: архив глубже, чем программа в памяти (поменяли настройку): скачать заново в фоне
+sub checkBack()
+    need = epgMaxBack(m.depth)
+    if m.loadedAt > 0 and need > m.loadedBack then
+        dbg("EPG", "archive depth " + Int(need / 86400).ToStr() + " days, the programme keeps " + Int(m.loadedBack / 86400).ToStr() + ": download again")
+        m.nextLoad = CreateObject("roDateTime").AsSeconds() + 5
+    end if
 end sub
 
 ' Playlist keys -> file channels using the ids/names kept from the last load
 ' Ключи плейлиста -> каналы файла по id/названиям, сохранённым от последней загрузки
 sub remap()
-    epgParseBegin(m.keys)
+    epgParseBegin(m.keys, m.depth)
     for each fid in m.fileIdList
         m.ep.fileIds[fid] = true
     end for
@@ -168,7 +197,7 @@ sub setStatus(state as string, err as string)
         dt.ToLocalTime()
         upd = epgPad(dt.GetHours()) + ":" + epgPad(dt.GetMinutes())
     end if
-    m.top.status = { state: state, channels: countWithGuide(), updated: upd, error: err }
+    m.top.status = { state: state, channels: countWithGuide(), updated: upd, error: err, loadedAt: m.loadedAt, refreshing: (m.loading and m.hadOld), prog: m.progText }
 end sub
 
 function countWithGuide() as integer
@@ -217,7 +246,9 @@ function loadFromCache() as boolean
     fs = CreateObject("roFileSystem")
     if not fs.Exists(cacheFile()) then return false
     idx = ParseJson(ReadAsciiFile(cacheFile()))
-    if idx = invalid or idx.url <> m.url or idx.v <> 3 or idx.parts = invalid then return false
+    ' v4 (1.5.0): older days of archive channels, descriptions only for now + next
+    ' v4 (1.5.0): старые дни у каналов с архивом, описания — только у текущей и следующей
+    if idx = invalid or idx.url <> m.url or idx.v <> 4 or idx.parts = invalid then return false
     now = CreateObject("roDateTime").AsSeconds()
     age = now - idx.loadedAt
     if age >= m.cfg.epgMaxAgeSec then
@@ -258,6 +289,9 @@ function loadFromCache() as boolean
     m.rangesOk = (idx.ranges = true)
     m.chanPos = idx.chanPos
     if m.chanPos = invalid then m.chanPos = {}
+    m.loadedBack = 86400
+    if idx.back <> invalid then m.loadedBack = idx.back
+    m.descTried = {}
     m.fileSize = 0
     if idx.size <> invalid then m.fileSize = idx.size
     ' Older than the refresh period: shown now, fresh file in the background (next loop pass)
@@ -315,7 +349,7 @@ sub saveCache(ids as object, names as object)
         parts = parts + 1
     end if
     if ok then
-        ok = WriteAsciiFile(cacheFile(), FormatJson({ v: 3, url: m.url, loadedAt: m.loadedAt, base: base, parts: parts, ids: idList, names: names, ranges: m.rangesOk, chanPos: m.chanPos, size: m.fileSize }, &h0001))
+        ok = WriteAsciiFile(cacheFile(), FormatJson({ v: 4, back: m.loadedBack, url: m.url, loadedAt: m.loadedAt, base: base, parts: parts, ids: idList, names: names, ranges: m.rangesOk, chanPos: m.chanPos, size: m.fileSize }, &h0001))
     end if
     for p = 0 to parts - 1
         st = fs.Stat(partFile(p))
@@ -371,7 +405,8 @@ sub loadFromNetwork()
         return
     end if
 
-    epgParseBegin(m.keys)
+    epgParseBegin(m.keys, m.depth)
+    m.progText = ""
     chunkSize = m.cfg.epgChunkBytes
     ok = true
     if head.ranges = "bytes" and head.size > 0 then
@@ -390,6 +425,9 @@ sub loadFromNetwork()
     m.progs = ep.progs
     m.keyToFile = ep.keyToFile
     m.loadedAt = CreateObject("roDateTime").AsSeconds()
+    m.loadedBack = epgMaxBack(m.depth)
+    m.descTried = {}
+    m.progText = ""
     dbg("EPG", Int(head.size / 1048576).ToStr() + " MB in " + t0.TotalMilliseconds().ToStr() + " ms; file channels " + ep.fileIds.Count().ToStr() + ", matched by id " + ep.byId.ToStr() + ", by name " + ep.byName.ToStr() + "; programmes " + ep.total.ToStr() + ", kept " + ep.kept.ToStr() + "; channels with guide " + countWithGuide().ToStr() + " of " + m.keys.Count().ToStr())
     dbg("EPG", "dropped: channel not in playlist " + ep.dropChan.ToStr() + ", outside the window " + ep.dropWindow.ToStr() + ", bad time " + ep.dropTime.ToStr())
     dbg("EPG", "file programmes " + ep.minDate + " .. " + ep.maxDate + " (window " + epgStamp(ep.winLo) + " .. " + epgStamp(ep.winHi) + " UTC)")
@@ -539,11 +577,20 @@ function readByRanges(size as integer, chunkSize as integer, t0 as object) as bo
             publishPartial()
             nextLog = nextLog + 20 * 1048576
         end if
+        showProgress(offset, size)
         serviceRequests()
         if loadAborted() then return false
     end while
     return true
 end function
+
+' 1.5.0: "60/190" MB for the Settings row (every 10 MB) / МБ для строки Настроек (каждые 10 МБ)
+sub showProgress(offset as integer, size as integer)
+    t = Int(offset / 1048576).ToStr() + "/" + Int(size / 1048576).ToStr()
+    if Int(offset / 10485760) = Int((offset - 1) / 10485760) and m.progText <> "" then return
+    m.progText = t
+    if m.hadOld then setStatus("ready", "") else setStatus("loading", "")
+end sub
 
 ' No Range: save the file to cachefs: and read it from there piece by piece
 ' Нет Range: сохраняем файл в cachefs: и читаем оттуда кусками
@@ -593,6 +640,7 @@ function readViaFile(size as integer, chunkSize as integer, t0 as object) as boo
             publishPartial()
             nextLog = nextLog + 20 * 1048576
         end if
+        showProgress(offset, size)
         serviceRequests()
         if loadAborted() then return false
     end while
@@ -639,20 +687,51 @@ sub publishNow()
     m.top.nowMap = map
 end sub
 
-' Whole window of one channel (yesterday .. tomorrow) / Всё окно одного канала
-sub answerList(key as dynamic)
-    if key = invalid or key = "" then return
+' Programmes of one channel that end after "from" (0 = the last 24 h) up to tomorrow.
+' more = older programmes are kept too (the "Load more" row of the list, 1.5.0).
+' Передачи канала, закончившиеся после from (0 — последние сутки), до завтра.
+' more — есть и более старые (строка «Загрузить ещё», 1.5.0).
+sub answerList(q as dynamic)
+    if q = invalid or q.key = invalid or q.key = "" then return
+    key = q.key
+    from = 0
+    if q.from <> invalid then from = q.from
+    if from <= 0 then from = CreateObject("roDateTime").AsSeconds() - 86400
     items = []
+    more = false
     fid = m.keyToFile[key]
     if fid <> invalid then
         pr = m.progs[fid]
         if pr <> invalid then
             for k = 0 to pr.s.Count() - 1
-                items.push({ s: pr.s[k], e: pr.e[k], t: pr.t[k], d: pr.d[k] })
+                if pr.e[k] <= from then
+                    more = true
+                else
+                    items.push({ s: pr.s[k], e: pr.e[k], t: pr.t[k], d: pr.d[k] })
+                end if
             end for
         end if
     end if
-    m.top.list = { key: key, items: items }
+    m.top.list = { key: key, from: from, more: more, items: items }
+end sub
+
+' 1.5.0: the programme that starts when the archive programme ends / передача после архивной
+sub answerNext(q as dynamic)
+    if q = invalid or q.key = invalid then return
+    ans = { key: q.key, s: q.s, item: invalid }
+    fid = m.keyToFile[q.key]
+    if fid <> invalid then
+        pr = m.progs[fid]
+        if pr <> invalid then
+            for k = 0 to pr.s.Count() - 1
+                if pr.s[k] >= q.s - 60 then
+                    ans.item = { s: pr.s[k], e: pr.e[k], t: pr.t[k] }
+                    exit for
+                end if
+            end for
+        end if
+    end if
+    m.top.nextAns = ans
 end sub
 
 sub answerDetail(key as dynamic)
@@ -704,6 +783,14 @@ sub answerDesc(q as dynamic)
         return
     end if
     ans.d = pr.d[k]
+    ' 1.5.0: the column under the video asks by itself; a failed programme is not asked again
+    ' 1.5.0: колонка под видео спрашивает сама; неудачную передачу больше не спрашиваем
+    tk = fid + "|" + q.s.ToStr()
+    if q.DoesExist("auto") and (ans.d <> "" or m.descTried.DoesExist(tk)) then
+        m.top.descAns = ans
+        return
+    end if
+    m.descTried[tk] = true
     o = -1
     if pr.o <> invalid and k < pr.o.Count() then o = pr.o[k]
     if not m.rangesOk then
@@ -715,6 +802,11 @@ sub answerDesc(q as dynamic)
         if full.ok then
             ans.d = full.d
             ans.src = "network"
+            ' Keep the short text in memory: the column and the rows get it next time
+            ' Краткий текст остаётся в памяти: в следующий раз колонка получит его сразу
+            sd = full.d
+            if sd.Len() > 200 then sd = sd.Left(197) + "..."
+            pr.d[k] = sd
         else
             ans.why = full.why
         end if
@@ -845,17 +937,17 @@ function descBytes(t as string) as integer
 end function
 
 ' One piece of the file / Один кусок файла: { code, text, total, why }
-function rangeGet(a as integer, b as integer) as object
+function rangeGet(a as integer, b as integer, waitMs = 4000 as integer) as object
     res = { code: 0, text: "", total: 0, why: "network" }
     port = CreateObject("roMessagePort")
     req = newRequest(m.url)
     req.SetMessagePort(port)
     req.AddHeader("Range", "bytes=" + a.ToStr() + "-" + b.ToStr())
     if not req.AsyncGetToString() then return res
-    msg = wait(4000, port)
+    msg = wait(waitMs, port)
     if type(msg) <> "roUrlEvent" then
         req.AsyncCancel()
-        res.why = "no answer in 4 s"
+        res.why = "no answer in " + Int(waitMs / 1000).ToStr() + " s"
         return res
     end if
     res.code = msg.GetResponseCode()
@@ -871,55 +963,66 @@ function rangeGet(a as integer, b as integer) as object
 end function
 
 ' ---------- programme search (1.4.0) / поиск передач ----------
-' Titles (or the short descriptions) of the allowed channels are checked with the regex from
-' buildFindRegex. Up to 300 results: the nearest to "now" are kept, then sorted:
+' Titles of the allowed channels are checked with the regex from buildFindRegex.
+' 1.5.0: keys = { channelKey: days back } (1 day, 3 days or the archive depth of the channel);
+' descriptions are searched in the whole file over the network (scanDesc), with a stop.
+' Up to 300 results: the nearest to "now" are kept, then sorted:
 ' past (by time), on air, future (by time).
-' Названия (или короткие описания) разрешённых каналов проверяются шаблоном из buildFindRegex.
-' До 300 результатов: остаются ближайшие к «сейчас», затем порядок: прошедшие (по времени),
-' в эфире, будущие (по времени).
+' Названия разрешённых каналов проверяются шаблоном из buildFindRegex.
+' 1.5.0: keys — сколько дней назад искать у канала; описания ищутся по всему файлу через сеть
+' (scanDesc), с остановкой. До 300 результатов: остаются ближайшие к «сейчас», затем порядок:
+' прошедшие (по времени), в эфире, будущие (по времени).
 sub answerFind(q as dynamic)
     if q = invalid or q.q = invalid then return
     t0 = CreateObject("roTimespan")
-    ans = { q: q.q, kind: q.kind, total: 0, items: [] }
+    ans = { q: q.q, kind: q.kind, total: 0, items: [], err: "", stopped: false }
     rx = buildFindRegex(q.q)
     if rx = invalid or q.keys = invalid then
         m.top.findAns = ans
         return
     end if
     now = CreateObject("roDateTime").AsSeconds()
-    seen = {}
+    ' File channel -> the earliest end to look at and the playlist key / канал файла -> граница и ключ
+    lo = {}
+    fkey = {}
+    for each key in q.keys
+        fid = m.keyToFile[key]
+        if fid <> invalid then
+            d = q.keys[key]
+            if type(d) = "roBoolean" or type(d) = "Boolean" or d = invalid or d < 1 then d = 1
+            b = now - d * 86400
+            if lo[fid] = invalid or b < lo[fid] then
+                lo[fid] = b
+                fkey[fid] = key
+            end if
+        end if
+    end for
     found = []
     total = 0
     checked = 0
-    for each key in q.keys
-        fid = m.keyToFile[key]
-        if fid <> invalid and not seen.DoesExist(fid) then
-            seen[fid] = true
+    if q.kind = "desc" then
+        r = scanDesc(rx, lo, fkey, now, found)
+        total = r.total
+        checked = r.checked
+        ans.err = r.err
+        ans.stopped = r.stopped
+    else
+        for each fid in lo
             pr = m.progs[fid]
             if pr <> invalid then
-                arr = pr.t
-                if q.kind = "desc" then arr = pr.d
-                for i = 0 to arr.Count() - 1
-                    checked = checked + 1
-                    if arr[i] <> "" and rx.IsMatch(arr[i]) then
-                        total = total + 1
-                        if found.Count() < 5000 then
-                            cat = 2
-                            if pr.e[i] <= now then
-                                cat = 0
-                            else if pr.s[i] <= now then
-                                cat = 1
-                            end if
-                            dist = pr.s[i] - now
-                            if dist < 0 then dist = -dist
-                            if cat = 1 then dist = 0
-                            found.push({ key: key, s: pr.s[i], e: pr.e[i], t: pr.t[i], d: pr.d[i], cat: cat, dist: dist, ord: cat * 1000000 + (pr.s[i] - now + 400000) })
+                b = lo[fid]
+                for i = 0 to pr.t.Count() - 1
+                    if pr.e[i] > b then
+                        checked = checked + 1
+                        if rx.IsMatch(pr.t[i]) then
+                            total = total + 1
+                            if found.Count() < 5000 then found.push(findItem(fkey[fid], pr.s[i], pr.e[i], pr.t[i], pr.d[i], now))
                         end if
                     end if
                 end for
             end if
-        end if
-    end for
+        end for
+    end if
     if found.Count() > 300 then
         found.SortBy("dist")
         keep = []
@@ -931,6 +1034,135 @@ sub answerFind(q as dynamic)
     found.SortBy("ord")
     ans.total = total
     ans.items = found
-    dbg("EPG", "search " + q.kind + ": " + total.ToStr() + " found of " + checked.ToStr() + " in " + t0.TotalMilliseconds().ToStr() + " ms")
+    dbg("EPG", "search " + q.kind + ": " + total.ToStr() + " found of " + checked.ToStr() + " in " + t0.TotalMilliseconds().ToStr() + " ms" + iifs(ans.err <> "", ", error " + ans.err, "") + iifs(ans.stopped, ", stopped", ""))
     m.top.findAns = ans
 end sub
+
+function iifs(c as boolean, a as string, b as string) as string
+    if c then return a
+    return b
+end function
+
+function findItem(key as string, s as integer, e as integer, t as string, d as string, now as integer) as object
+    cat = 2
+    if e <= now then
+        cat = 0
+    else if s <= now then
+        cat = 1
+    end if
+    dist = s - now
+    if dist < 0 then dist = -dist
+    if cat = 1 then dist = 0
+    return { key: key, s: s, e: e, t: t, d: d, cat: cat, dist: dist, ord: cat * 10000000 + (s - now + 4000000) }
+end function
+
+' 1.5.0: descriptions are not kept in memory, so the file is read again over the network in
+' 4 MB pieces. A piece without any match is skipped at once; otherwise its programmes of the
+' allowed channels are checked. Progress goes to findProg; findStop stops the reading.
+' 1.5.0: описаний в памяти нет, поэтому файл читается заново через сеть кусками по 4 МБ.
+' Кусок без совпадений пропускается сразу; иначе проверяются его передачи разрешённых каналов.
+' Ход — в findProg; findStop останавливает чтение.
+function scanDesc(rx as object, lo as object, fkey as object, now as integer, found as object) as object
+    r = { total: 0, checked: 0, err: "", stopped: false }
+    if m.loading then
+        r.err = "busy"
+        return r
+    end if
+    if m.url = "" or not m.rangesOk then
+        r.err = "noranges"
+        return r
+    end if
+    head = headRequest(m.url)
+    size = head.size
+    if head.code < 200 or head.code >= 400 or size <= 0 then
+        r.err = "network"
+        return r
+    end if
+    m.scanning = true
+    m.findCancel = false
+    hi = now + 86400
+    chunk = m.cfg.epgChunkBytes
+    offset = 0
+    carry = ""
+    m.top.findProg = { mb: 0, total: Int(size / 1048576) }
+    while offset < size
+        serviceRequests()
+        if m.findCancel then
+            r.stopped = true
+            exit while
+        end if
+        last = offset + chunk - 1
+        if last >= size - 1 then last = size - 1
+        g = rangeGet(offset, last, 60000)
+        if g.code <> 206 and not (g.code = 200 and offset = 0) then
+            r.err = "network"
+            exit while
+        end if
+        text = carry + g.text
+        g = invalid
+        offset = last + 1
+        isLast = (offset >= size)
+        carry = ""
+        if rx.IsMatch(text) then
+            pieces = text.Split("</programme>")
+            n = pieces.Count()
+            upto = n - 1
+            if isLast then upto = n
+            for i = 0 to upto - 1
+                piece = pieces[i]
+                if rx.IsMatch(piece) then
+                    p = piece.Instr("<programme")
+                    te = -1
+                    if p >= 0 then te = piece.Instr(p, ">")
+                    if te > 0 then
+                        hd = piece.Mid(p, te - p)
+                        cid = epgAttr(hd, "channel")
+                        b = lo[cid]
+                        if b <> invalid then
+                            r.checked = r.checked + 1
+                            d = epgTag(piece, "desc", te)
+                            if d <> "" and rx.IsMatch(d) then
+                                st = epgAttr(hd, "start")
+                                sp = epgAttr(hd, "stop")
+                                if st.Len() >= 14 then
+                                    offs = st.Mid(14).Trim()
+                                    s = epgToEpoch(st.Left(14), offs)
+                                    e = s + 1800
+                                    if sp.Len() >= 14 then e = epgToEpoch(sp.Left(14), epgStopOffset(sp, offs))
+                                    if s > 0 and e > b and s < hi then
+                                        r.total = r.total + 1
+                                        if d.Len() > 200 then d = d.Left(197) + "..."
+                                        if found.Count() < 5000 then found.push(findItem(fkey[cid], s, e, epgTag(piece, "title", te), d, now))
+                                    end if
+                                end if
+                            end if
+                        end if
+                    end if
+                end if
+            end for
+            if not isLast then carry = pieces[n - 1]
+            pieces = invalid
+        else if not isLast then
+            k = lastProgEnd(text)
+            if k >= 0 then carry = text.Mid(k + 12) else carry = text.Right(65536)
+        end if
+        text = ""
+        m.top.findProg = { mb: Int(offset / 1048576), total: Int(size / 1048576) }
+    end while
+    m.scanning = false
+    return r
+end function
+
+' Position of the last "</programme>" (searched in the last 64 KB) / Место последнего «</programme>»
+function lastProgEnd(text as string) as integer
+    from = text.Len() - 65536
+    if from < 0 then from = 0
+    at = -1
+    while true
+        q = text.Instr(from, "</programme>")
+        if q < 0 then exit while
+        at = q
+        from = q + 1
+    end while
+    return at
+end function

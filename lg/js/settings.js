@@ -29,7 +29,9 @@ var Settings = {
   // ---------- Главный список (порядок как в Roku) ----------
   buildMain: function () {
     var pl = Playlists.byId(App.plId);
-    var plValue = pl ? pl.name + ' · ' + Lang.count(App.channels.length) + (App.plStale ? ' ' + t('staleShort') : '') : '';
+    // 1.5.0: свежий ли список / is the list fresh
+    var plValue = pl ? pl.name + ' · ' + Lang.count(App.channels.length) + (App.plStale ? ' ' + t('staleShort')
+      : App.plFreshAt ? ' · ' + t('plUpdated', { t: EPG.hm(App.plFreshAt) }) : ' · ' + t('plUpdating')) : '';
     this.items = [
       { key: 'playlist', label: t('playlistRow') + ' >', value: plValue, action: function () { Settings.openPlaylistPage(); } },
       { label: t('sPin'), value: Config.d.pin ? t('sPinOn') : t('sPinOff'),
@@ -84,6 +86,8 @@ var Settings = {
     pl.arch = { t: tp, d: d };
     Config.save();
     Log.info('Архив плейлиста id ' + pl.id + ': ' + tp + ', ' + d + ' дн.');
+    // 1.5.0: программа хранит столько дней назад, какова глубина архива — при росте скачать заново
+    if (App.channels.length && EPG.state === 'ready' && EPG.maxBack(EPG.depthMap(App.channels)) > EPG.back) EPG.load(App.meta, App.channels, false);
     this.draw();
   },
 
@@ -162,9 +166,16 @@ var Settings = {
     this.drawMain();
   },
 
+  // 1.5.0: актуальна ли программа (свежая, обновляется, устарела)
   epgStatus: function () {
-    if (EPG.loading && EPG.state !== 'ready') return t('epgLoadingShort');
-    if (EPG.state === 'ready') return t('epgStatus', { n: Lang.count(EPG.stats ? EPG.stats.channels : 0), time: EPG.hm(EPG.loadedAt) });
+    if (EPG.loading && EPG.state !== 'ready') return EPG.prog ? t('epgLoadingP', { p: EPG.prog }) : t('epgLoadingShort');
+    if (EPG.state === 'ready') {
+      var a = Date.now() - EPG.loadedAt, ago = a < 3600000 ? t('agoMin', { n: Math.floor(a / 60000) }) : t('agoHour', { n: Math.floor(a / 3600000) });
+      if (EPG.loading && EPG.prog) return t('epgRefreshing', { p: EPG.prog, ago: ago });
+      // Свежая копия положена через 12 ч; 13 ч и старше — обновить не удалось
+      if (a > 13 * 3600000) return t('epgOld', { ago: ago });
+      return t('epgFresh', { ago: ago, n: Lang.count(EPG.stats ? EPG.stats.channels : 0) });
+    }
     if (EPG.state === 'nourl') return t('epgNoSourceShort');
     if (EPG.state === 'error') return t('epgErrorShort');
     return '';

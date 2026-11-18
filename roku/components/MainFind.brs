@@ -29,6 +29,7 @@ sub findInit()
     m.centerTo = -1
     m.findBusy = false
     m.epgSvc.observeField("findAns", "onFindAns")
+    m.epgSvc.observeField("findProg", "onFindProg")
     m.centerTimer = m.top.findNode("centerTimer")
     m.centerTimer.observeField("fire", "onCenterTimer")
 end sub
@@ -99,7 +100,9 @@ sub openFindKeyboard(kind as string)
         dlg.text = m.findQuery
     end if
     dlg.message = [m.S.findMaskHint]
-    dlg.buttons = [m.S.ok, m.S.cancel]
+    ' 1.5.0: programmes: "Next" opens the choice of how far back to search
+    ' 1.5.0: передачи: «Далее» открывает выбор, насколько далеко назад искать
+    if kind = "chan" then dlg.buttons = [m.S.ok, m.S.cancel] else dlg.buttons = [m.S.findNext, m.S.cancel]
     showDialog(dlg, "search", invalid)
 end sub
 
@@ -108,8 +111,42 @@ sub runFindText(txt as string)
     if m.findKind = "chan" then
         runSearch(txt)
     else
-        runFind(m.findKind, txt)
+        openFindDepth(m.findKind, txt)
     end if
+end sub
+
+' 1 day / 3 days / Maximum; "1 day" has the focus, so a second OK searches at once
+' 1 день / 3 дня / Максимум; фокус на «1 день» — второй OK сразу ищет
+sub openFindDepth(kind as string, txt as string)
+    if buildFindRegex(txt) = invalid then return
+    msg = [m.S.findDepthMsg]
+    if kind = "desc" then msg = [m.S.findScanWarn, m.S.findDepthMsg]
+    title = m.S.findTitle
+    if kind = "desc" then title = m.S.findDesc
+    dlg = newMessageDialog(title + ": " + txt, msg, [m.S.depth1, m.S.depth3, m.S.depthMax, m.S.cancel])
+    focusButton(dlg, 0)
+    showDialog(dlg, "findDepth", { kind: kind, q: txt })
+end sub
+
+sub onFindDepthButton(b as integer, ctx as object)
+    closeDialog()
+    if b < 0 or b > 2 then return
+    days = [1, 3, 0]
+    runFind(ctx.kind, ctx.q, days[b])
+end sub
+
+' Description search reads the file: a window with the progress and "Stop"
+' Поиск в описаниях читает файл: окно с ходом и кнопкой «Остановить»
+sub onFindProg()
+    p = m.epgSvc.findProg
+    if p = invalid or m.dlgKind <> "findScan" or m.dlgNode = invalid then return
+    m.dlgNode.message = [m.S.findScanMsg.Replace("{a}", p.mb.ToStr()).Replace("{b}", p.total.ToStr())]
+end sub
+
+sub stopFindScan()
+    if not m.findBusy then return
+    dbg("UI", "search in descriptions: stop")
+    m.epgSvc.findStop = true
 end sub
 
 ' Is the group of this channel marked 18+? Cached per group / Отметка 18+ у группы канала
@@ -121,7 +158,9 @@ function adultGroupFlags() as object
     return flags
 end function
 
-sub runFind(kind as string, query as string)
+' days: 1, 3 or 0 = the archive depth of every channel (1 day for channels without an archive)
+' days: 1, 3 или 0 — глубина архива каждого канала (сутки у каналов без архива)
+sub runFind(kind as string, query as string, days as integer)
     if buildFindRegex(query) = invalid or m.channels = invalid then return
     st = m.epgStatus.state
     if st <> "ready" and st <> "loading" then
@@ -130,6 +169,7 @@ sub runFind(kind as string, query as string)
     end if
     ' Allowed channels: shown groups without the 18+ mark / Разрешённые каналы: показанные группы без отметки 18+
     adult = adultGroupFlags()
+    arch = currentArchive()
     keys = {}
     m.findKeyIx = {}
     for each k in m.allIdx
@@ -137,15 +177,32 @@ sub runFind(kind as string, query as string)
         if not adult[ch.gi] then
             key = epgKeyOf(ch)
             if not keys.DoesExist(key) then
-                keys[key] = true
+                ' Days back for this channel: deeper than 1 day only with an archive
+                ' Сколько дней назад у этого канала: глубже суток — только с архивом
+                dep = 0
+                info = archiveInfo(ch, arch)
+                if info <> invalid then dep = info.d
+                d = 1
+                if days = 3 then
+                    d = dep
+                    if d > 3 then d = 3
+                else if days = 0 then
+                    d = dep
+                end if
+                if d < 1 then d = 1
+                keys[key] = d
                 m.findKeyIx[key] = k
             end if
         end if
     end for
     m.findBusy = true
     m.chanHeader.text = m.S.searching     ' 1.4.1: the search takes a few seconds / поиск идёт несколько секунд
-    dbg("UI", "search " + kind + " '" + normText(query) + "' in " + keys.Count().ToStr() + " channels")
+    dbg("UI", "search " + kind + " '" + normText(query) + "' in " + keys.Count().ToStr() + " channels, days " + days.ToStr())
     m.epgSvc.findReq = { kind: kind, q: query, keys: keys }
+    if kind = "desc" then
+        dlg = newMessageDialog(m.S.findDesc + ": " + query, [m.S.findScanMsg.Replace("{a}", "0").Replace("{b}", "…")], [m.S.stopWord])
+        showDialog(dlg, "findScan", invalid)
+    end if
 end sub
 
 sub onFindAns()
@@ -153,6 +210,19 @@ sub onFindAns()
     if a = invalid or not m.findBusy then return
     m.findBusy = false
     updateChanHeader()
+    if m.dlgKind = "findScan" then closeDialog()
+    ' 1.5.0: description search could not read the file / поиск в описаниях не смог прочитать файл
+    if a.err <> invalid and a.err <> "" then
+        msg = m.S.findErrNet
+        if a.err = "busy" then msg = m.S.findErrBusy
+        if a.err = "noranges" then msg = m.S.findErrRanges
+        showInfoDialog(m.S.findDesc, [msg])
+        return
+    end if
+    if a.stopped = true and a.items.Count() = 0 then
+        showInfoDialog(m.S.findDesc, [m.S.findStopped])
+        return
+    end if
     items = []
     idx = []
     for each it in a.items
@@ -273,6 +343,10 @@ sub peekFound(p as integer)
     if p < 0 or p >= m.findItems.Count() then return
     m.findWant = m.findItems[p].s
     m.findPeek = true
+    ' 1.5.0: a programme older than a day: the list starts a bit before it
+    ' 1.5.0: передача старше суток — список начинается чуть раньше неё
+    now = CreateObject("roDateTime").AsSeconds()
+    if m.findWant < now - 86400 + 3 * 3600 then m.guideFrom = m.findWant - 3 * 3600
     openGuide(m.findIdx[p])
 end sub
 

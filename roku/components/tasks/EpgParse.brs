@@ -3,24 +3,32 @@
 '
 ' XMLTV parsing helpers. The file is fed in pieces (chunks); only complete
 ' <channel> and <programme> elements are parsed, the tail waits for the next chunk.
-' Kept: programmes of playlist channels inside the window "−24 h … +24 h";
-' short descriptions (200 chars) for all of them; the full text is fetched on request (1.3.4).
+' Kept: programmes of playlist channels from "−24 h" (1.5.0: from the archive depth of the
+' channel, if it has an archive) to "+24 h". 1.5.0: the short description (200 chars) only for
+' the programme on air and the next one of every channel; any other description is fetched
+' from the file on request by its byte place (1.3.4).
 ' Помощники разбора XMLTV. Файл подаётся кусками; разбираются только законченные
 ' <channel> и <programme>, хвост ждёт следующего куска.
-' Храним: передачи каналов плейлиста в окне «−24 ч … +24 ч»;
-' описания — у всех, до 300 символов (1.3.2; раньше — только ближайшие 4 часа).
+' Храним: передачи каналов плейлиста от «−24 ч» (1.5.0: от глубины архива канала, если архив
+' есть) до «+24 ч». 1.5.0: краткое описание (200 символов) — только у передачи в эфире и
+' следующей; любое другое описание скачивается из файла по запросу по его байтовому месту.
 '
 ' State in m.ep (one parse) / Состояние в m.ep (один разбор):
 '   carry, channelsDone, fileIds{}, fileNames{normName: id}, wanted{fileId}, keyToFile{},
 '   progs{fileId: {s:[], e:[], t:[], d:[]}}, winLo, winHi, descUntil, winCache{},
 '   stats: total, kept, dropChan, dropWindow, dropTime, minDate, maxDate
 
-sub epgParseBegin(keys as object)
+' depth: channel key -> archive depth in days (0 or missing = no archive) / глубина архива в днях
+sub epgParseBegin(keys as object, depth as dynamic)
     now = CreateObject("roDateTime").AsSeconds()
+    if depth = invalid then depth = {}
+    back = epgMaxBack(depth)
     m.ep = {
-        carry: "", channelsDone: false, keys: keys
+        carry: "", channelsDone: false, keys: keys, depth: depth, now: now
+        backOf: {}      ' file channel id -> seconds back to keep / сколько секунд назад хранить
+        descN: {}       ' file channel id -> descriptions kept (now + next) / сколько описаний сохранено
         fileIds: {}, fileNames: {}, wanted: {}, keyToFile: {}, progs: {}
-        winLo: now - 24 * 3600, winHi: now + 24 * 3600, descUntil: now + 4 * 3600, winCache: {}
+        winLo: now - back, winHi: now + 24 * 3600, winCache: {}
         total: 0, kept: 0, dropChan: 0, dropWindow: 0, dropTime: 0, minDate: "", maxDate: ""
         byId: 0, byName: 0
         chanPos: {}   ' file channel id -> byte of its first programme (file order) / порядок каналов в файле
@@ -29,6 +37,18 @@ sub epgParseBegin(keys as object)
         rxName: CreateObject("roRegex", "<display-name[^>]*>([^<]*)</display-name>", "")
     }
 end sub
+
+' Seconds back of the widest channel window: 1 day, or the deepest archive (at most 14 days)
+' Сколько секунд назад у самого широкого окна: сутки или самый глубокий архив (не больше 14 дней)
+function epgMaxBack(depth as object) as integer
+    d = 1
+    for each k in depth
+        v = depth[k]
+        if v <> invalid and v > d then d = v
+    end for
+    if d > 14 then d = 14
+    return d * 86400
+end function
 
 ' Feed one chunk; last = true for the end of the file
 ' Подать один кусок; last = true в конце файла
@@ -113,6 +133,13 @@ sub epgBuildKeyMap()
         if fid <> invalid then
             ep.keyToFile[key] = fid
             ep.wanted[fid] = true
+            ' 1.5.0: the deepest archive of the playlist channels on this file channel
+            ' 1.5.0: самый глубокий архив среди каналов плейлиста на этом канале файла
+            d = ep.depth[key]
+            if d = invalid or d < 1 then d = 1
+            if d > 14 then d = 14
+            b = ep.backOf[fid]
+            if b = invalid or b < d * 86400 then ep.backOf[fid] = d * 86400
         end if
     end for
 end sub
@@ -169,11 +196,27 @@ sub epgParseProgramme(piece as string, pieceByte as integer)
         ep.dropTime = ep.dropTime + 1
         return
     end if
+    ' 1.5.0: older than the archive depth of this channel (1 day without an archive)
+    ' 1.5.0: старше глубины архива этого канала (сутки без архива)
+    b = ep.backOf[cid]
+    if b = invalid then b = 86400
+    if e <= ep.now - b then
+        ep.dropWindow = ep.dropWindow + 1
+        return
+    end if
     title = epgTag(piece, "title", te)
-    desc = epgTag(piece, "desc", te)
-    ' Short text for rows and the info column; the full one is fetched on request (1.3.4)
-    ' Короткий текст для строк и колонки; полный скачивается по запросу (1.3.4)
-    if desc.Len() > 200 then desc = desc.Left(197) + "..."
+    ' 1.5.0: the short description only for the programme on air and the next one
+    ' 1.5.0: краткое описание — только у передачи в эфире и следующей
+    desc = ""
+    if e > ep.now then
+        dn = ep.descN[cid]
+        if dn = invalid then dn = 0
+        if dn < 2 then
+            desc = epgTag(piece, "desc", te)
+            if desc.Len() > 200 then desc = desc.Left(197) + "..."
+            ep.descN[cid] = dn + 1
+        end if
+    end if
 
     pr = ep.progs[cid]
     if pr = invalid then

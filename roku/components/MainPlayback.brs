@@ -8,6 +8,47 @@
 
 ' ---------- playback / воспроизведение ----------
 
+' 1.5.0: archive watch: restart on errors and long buffering (up to 3 times), the next
+' programme when one ends. Nothing here touches m.S (strings are not loaded yet in init).
+' 1.5.0: присмотр за архивом: перезапуск при ошибке и долгой буферизации (до 3 раз), следующая
+' передача, когда закончилась текущая. m.S здесь не трогаем (в init строк ещё нет).
+sub playbackInit()
+    m.archRetry = 0           ' restarts in a row / перезапусков подряд
+    m.archEver = false        ' the archive programme has played at least once / архив хоть раз пошёл
+    m.archAuto = false        ' the next playArchiveAt is a restart, not the user's choice / следующий запуск — перезапуск
+    m.archOkClock = CreateObject("roTimespan")
+    m.nextAsked = false
+    m.nextPlay = false        ' the stream ended: play the next programme / поток закончился — включить следующую
+    m.bufTimer = m.top.findNode("bufTimer")
+    m.bufTimer.observeField("fire", "onBufTimer")
+    m.archTimer = m.top.findNode("archTimer")
+    m.archTimer.observeField("fire", "onArchTimer")
+    m.archTimer.control = "start"
+    m.epgSvc.observeField("nextAns", "onNextAns")
+end sub
+
+' Play and open the full screen at once (1.5.0: the first OK opens the full screen)
+' Включить и сразу открыть полный экран (1.5.0: первый OK открывает полный экран)
+sub playChannelFull(ix as integer)
+    playChannel(ix)
+    enterFull()
+end sub
+
+' Replay key: restart the stream (live), 15 s back (files) / Instant Replay: перезапуск потока (эфир), 15 с назад (файлы)
+sub restartStream()
+    if m.playingIx < 0 then return
+    if m.arch <> invalid then
+        dbg("PLAY", "restart of the archive by the user")
+        m.archRetry = 0
+        seekArchive(0)
+    else if m.channels[m.playingIx].v = true then
+        seekBy(-15)
+    else
+        dbg("PLAY", "restart of the stream by the user")
+        playChannel(m.playingIx)
+    end if
+end sub
+
 ' Live channel (or a file) / Прямой эфир канала (или файл)
 sub playChannel(ix as integer)
     if m.channels = invalid or ix < 0 or ix >= m.channels.Count() then return
@@ -23,6 +64,15 @@ sub playArchiveAt(ix as integer, s as integer, e as integer, title as string, of
     ch = m.channels[ix]
     info = archiveInfo(ch, currentArchive())
     if info = invalid then return
+    ' A new programme chosen by the user (or the next one): restarts are counted anew
+    ' Новая передача (выбрана или следующая): перезапуски считаются заново
+    if not m.archAuto then
+        m.archRetry = 0
+        m.archEver = false
+    end if
+    m.archAuto = false
+    m.nextAsked = false
+    m.nextPlay = false
     now = CreateObject("roDateTime").AsSeconds()
     url = archiveUrl(ch.u, info, s + offset, e, now)
     ' Own clock: Video.position of archive/shift streams follows the wall clock, not frames
@@ -50,6 +100,7 @@ sub seekArchive(delta as integer)
     if a.s + maxP > now - 30 then maxP = now - 30 - a.s
     if p > maxP then p = maxP
     if p < 0 then p = 0
+    m.archAuto = true      ' same programme: not a new choice / та же передача — не новый выбор
     playArchiveAt(m.playingIx, a.s, a.e, a.t, p)
 end sub
 
@@ -127,25 +178,124 @@ sub onVideoState()
     if st = "buffering" then
         m.spinTimer.control = "stop"
         m.spinTimer.control = "start"
+        if m.arch <> invalid and m.archEver then
+            m.bufTimer.control = "stop"
+            m.bufTimer.control = "start"
+        end if
     else
         hideVideoSpinner()
+        m.bufTimer.control = "stop"
     end if
     if st = "playing" then
         m.startTimer.control = "stop"
+        if m.arch <> invalid then
+            m.archEver = true
+            m.archOkClock.Mark()
+        end if
         rememberLastChannel()
         refreshAfterStart()
         if m.epgPending then m.epgStartTimer.control = "start"
     end if
     if st = "error" then
         m.startTimer.control = "stop"
-        m.lastError = m.S.playError
         dbg("ERR", "video error code=" + m.video.errorCode.ToStr() + " msg=" + m.video.errorMsg + " str=" + m.video.errorStr)
+        if m.arch <> invalid and archRestart("error") then return
+        m.lastError = m.S.playError
+        if m.arch <> invalid then
+            if m.archEver then m.lastError = m.S.archBroken else m.lastError = m.S.archNoStart
+        end if
         showPlayError()
         refreshAfterStart()
     else
         dbg("PLAY", "state=" + st)
     end if
+    ' Archive stream ended: at the end of the programme — the next one, else a restart
+    ' Поток архива закончился: в конце передачи — следующая, иначе перезапуск
+    if st = "finished" and m.arch <> invalid then
+        a = m.arch
+        if archPos() >= a.e - a.s - 120 then
+            askNextProgramme(true)
+        else
+            archRestart("finished")
+        end if
+    end if
     if m.mode = "main" then updatePreviewStatus()
+end sub
+
+' Restart of the archive from the same place, up to 3 times in a row (the count is reset after
+' 2 minutes of normal playing). Not for a programme that never started: its archive is missing.
+' Перезапуск архива с того же места, до 3 раз подряд (счёт сбрасывается после 2 минут
+' нормального показа). Не для передачи, которая так и не пошла: её архива нет.
+function archRestart(why as string) as boolean
+    if m.arch = invalid or not m.archEver then return false
+    if m.archOkClock.TotalSeconds() > 120 then m.archRetry = 0
+    if m.archRetry >= 3 then
+        dbg("PLAY", "archive " + why + ": 3 restarts did not help")
+        return false
+    end if
+    m.archRetry = m.archRetry + 1
+    dbg("PLAY", "archive " + why + ": restart " + m.archRetry.ToStr() + "/3 at +" + archPos().ToStr() + "s")
+    seekArchive(0)
+    return true
+end function
+
+' Buffering of the archive lasts 25 s / Буферизация архива длится 25 с
+sub onBufTimer()
+    if m.arch = invalid or m.videoState <> "buffering" then return
+    if not archRestart("buffering 25 s") then
+        m.lastError = m.S.archBroken
+        updatePreviewStatus()
+    end if
+end sub
+
+' Every 10 s: the archive programme is over — the next one (labels; the stream itself goes on)
+' Каждые 10 с: архивная передача закончилась — следующая (подписи; сам поток идёт дальше)
+sub onArchTimer()
+    if m.arch = invalid or m.videoState <> "playing" or m.nextAsked then return
+    a = m.arch
+    if archPos() >= a.e - a.s then askNextProgramme(false)
+end sub
+
+sub askNextProgramme(play as boolean)
+    if m.arch = invalid or m.playingIx < 0 then return
+    m.nextAsked = true
+    m.nextPlay = play
+    m.epgSvc.nextReq = { key: epgKeyOf(m.channels[m.playingIx]), s: m.arch.e }
+end sub
+
+sub onNextAns()
+    a = m.epgSvc.nextAns
+    if a = invalid or m.arch = invalid or a.s <> m.arch.e or m.playingIx < 0 then return
+    it = a.item
+    if it = invalid then
+        dbg("PLAY", "archive: no next programme in the guide")
+        return
+    end if
+    now = CreateObject("roDateTime").AsSeconds()
+    if m.nextPlay then
+        ' The stream ended: start the next programme (or live if it is on air now)
+        ' Поток закончился: включаем следующую передачу (или эфир, если она идёт сейчас)
+        dbg("PLAY", "archive: next programme '" + it.t + "'")
+        if it.s >= now - 60 then
+            playChannel(m.playingIx)
+        else
+            playArchiveAt(m.playingIx, it.s, it.e, it.t, 0)
+        end if
+        return
+    end if
+    ' The stream goes on (shift): only the programme under it changes, the clock keeps going
+    ' Поток идёт дальше (shift): меняется только передача, часы продолжают идти
+    old = m.arch
+    old.base = old.base - (it.s - old.s)
+    old.s = it.s
+    old.e = it.e
+    old.t = it.t
+    m.nextAsked = false
+    dbg("PLAY", "archive: now '" + it.t + "' " + hhmm(it.s) + "-" + hhmm(it.e))
+    updatePreviewStatus()
+    updateChanHeader()
+    markPlaying()
+    if m.mode = "full" then showOsd()
 end sub
 
 ' Channel did not start in time / Канал не начал показ вовремя

@@ -21,7 +21,7 @@ function isInput(el) {
 }
 
 var App = {
-  version: '1.4.1',
+  version: '1.5.0',
   PRIVACY_URL: 'https://shamilganiev.github.io/shaga-iptv-player/privacy.html',
   SUPPORT_URL: 'https://github.com/shamilganiev/shaga-iptv-player/issues',
   MAX_FAV: 200,
@@ -33,6 +33,7 @@ var App = {
   favSet: {},
   plId: null,        // плейлист, который сейчас показан
   plStale: false,    // показана сохранённая копия, обновить не удалось
+  plFreshAt: 0,      // 1.5.0: когда свежий список пришёл из сети (0 — показана копия)
   loadErr: '',       // при запуске нет ни кэша, ни сети — текст ошибки в колонке каналов
   search: null,      // { q, list } — результаты поиска каналов
   find: null,        // { q, kind, total, chans[], progs[] } — результаты поиска передач (1.4.0)
@@ -70,6 +71,8 @@ var App = {
     setInterval(function () { App.checkLocks(); }, 30000);
     // Программа передач: перерисовка после загрузки и раз в минуту (сменилась передача, сдвинулся прогресс)
     EPG.onUpdate = function () { Browser.refreshEpg(); if (Settings.mode === 'main' && App.screen === Settings) Settings.draw(); };
+    // 1.5.0: ход загрузки программы — в строке Настроек
+    EPG.onProgress = function () { if (Settings.mode === 'main' && App.screen === Settings) Settings.draw(); };
     setInterval(function () {
       Browser.refreshEpg();
       if (App.screen === Player && $('banner').classList.contains('on')) Player.drawBanner();
@@ -137,6 +140,7 @@ var App = {
       self.setChannels(res);
       self.saveCache(pl, res);
       self.plStale = false;
+      self.plFreshAt = Date.now();
       Config.d.lastOkId = pl.id;
       Config.save();
       if (self.screen === Browser) Browser.enter({});
@@ -156,6 +160,7 @@ var App = {
     if (this.plId !== pl.id && Player.ch) Player.stop();
     this.plId = pl.id;
     this.plStale = false;
+    this.plFreshAt = fresh ? Date.now() : 0;
     this.loadErr = '';
     this.search = null;
     this.openLocked = null;
@@ -308,13 +313,28 @@ var App = {
     Prompt.open({
       title: t(kind === 'chan' ? 'findChan' : kind === 'title' ? 'findTitle' : 'findDesc'), msg: t('findMaskHint'),
       value: kind === 'chan' ? (this.search ? this.search.q : '') : (this.find ? this.find.q : ''),
+      okLabel: kind === 'chan' ? '' : t('findNext'),
       onSubmit: function (q, prompt) {
         q = String(q).trim();
         if (!q) { prompt.close(); return; }
         prompt.close();
-        if (kind === 'chan') self.runSearch(q); else self.runFind(kind, q);
+        if (kind === 'chan') self.runSearch(q); else self.openFindDepth(kind, q);
       }
     });
+  },
+
+  // 1.5.0: «1 день / 3 дня / Максимум»; курсор на «1 день» — второй OK сразу ищет
+  openFindDepth: function (kind, q) {
+    var self = this;
+    if (!Text.findRegex(q)) return;
+    var msg = (kind === 'desc' ? t('findScanWarn') + '\n\n' : '') + t('findDepthMsg');
+    var go = function (days) { return function () { self.runFind(kind, q, days); }; };
+    Menu.open(t(kind === 'desc' ? 'findDesc' : 'findTitle') + ': ' + q, msg, [
+      { label: t('depth1'), action: go(1) },
+      { label: t('depth3'), action: go(3) },
+      { label: t('depthMax'), action: go(0) },
+      { label: t('cancel') }
+    ], { focus: 0 });
   },
 
   // Можно ли искать канал: группа показана и без отметки 18+ (строго — ни в одном поиске)
@@ -322,7 +342,9 @@ var App = {
 
   // 1.4.0: поиск передач. До 300 результатов: остаются ближайшие к «сейчас», порядок —
   // прошедшие (по времени), в эфире, будущие (по времени).
-  runFind: function (kind, q) {
+  // days: 1, 3 или 0 — глубина архива каждого канала (сутки у каналов без архива).
+  // 1.5.0: описаний в памяти нет — поиск в описаниях читает весь файл через сеть (EPG.scanDesc).
+  runFind: function (kind, q, days) {
     var self = this, rx = Text.findRegex(q);
     if (!rx) return;
     if (EPG.state !== 'ready' && EPG.state !== 'loading') {
@@ -330,24 +352,65 @@ var App = {
         t(EPG.state === 'nourl' ? 'epgNoSource' : EPG.state === 'error' ? 'epgError' : 'epgLoading'));
       return;
     }
-    var t0 = Date.now(), now = Date.now(), seen = {}, found = [], total = 0;
+    var t0 = Date.now(), now = Date.now(), seen = {}, found = [], total = 0, lo = {}, chOf = {};
+    var pl = Playlists.byId(App.plId), arch = pl && pl.arch;
+    days = days || 0;
     this.channels.forEach(function (ch) {
       if (!self.searchable(ch)) return;
       var key = EPG.key(ch);
       if (seen[key]) return;
       seen[key] = 1;
-      EPG.all(ch).forEach(function (p) {
-        var txt = kind === 'desc' ? p.d : p.t;
-        if (!txt || !rx.test(txt)) return;
-        total++;
-        if (found.length >= 5000) return;
-        var cat = p.e <= now ? 0 : p.s <= now ? 1 : 2;
-        found.push({ ch: ch, p: p, cat: cat, dist: cat === 1 ? 0 : Math.abs(p.s - now) });
+      // Глубже суток — только с архивом / Deeper than a day only with an archive
+      var info = Catchup.info(ch, arch), dep = info ? info.d : 0;
+      var d = days === 1 ? 1 : days === 3 ? Math.min(3, dep) : dep;
+      lo[key] = now - Math.max(1, Math.min(d, 14)) * EPG.DAY;
+      chOf[key] = ch;
+    });
+    var add = function (ch, p) {
+      total++;
+      if (found.length >= 5000) return;
+      var cat = p.e <= now ? 0 : p.s <= now ? 1 : 2;
+      found.push({ ch: ch, p: p, cat: cat, dist: cat === 1 ? 0 : Math.abs(p.s - now) });
+    };
+    if (kind === 'desc') {
+      if (EPG.loading && EPG.state !== 'ready') {
+        Confirm.open(t('findDesc'), [{ label: t('ok') }], null, t('findErrBusy'));
+        return;
+      }
+      var ctrl = {}, stop = function () { Log.info('Поиск в описаниях: остановлен'); ctrl.stop(); };
+      Confirm.open(t('findDesc') + ': ' + q, [{ label: t('stopWord'), action: stop }], stop, t('findScanMsg', { a: 0, b: '…' }));
+      Log.info('Поиск desc «' + Text.norm(q) + '», дней ' + days + ': чтение файла программы');
+      EPG.scanDesc(rx, lo, function (a, b) {
+        if (Confirm.isOpen && $('cfTitle').textContent === t('findDesc') + ': ' + q) $('cfMsg').textContent = t('findScanMsg', { a: a, b: b || '…' });
+      }, ctrl).then(function (r) {
+        if (Confirm.isOpen && $('cfTitle').textContent === t('findDesc') + ': ' + q) Confirm.close();
+        Log.info('Поиск desc: найдено ' + r.total + ' за ' + (Date.now() - t0) + ' мс' + (r.err ? ', ошибка ' + r.err : '') + (r.stopped ? ', остановлен' : ''));
+        if (r.err) { Confirm.open(t('findDesc'), [{ label: t('ok') }], null, t('findErrNet')); return; }
+        // Передача из памяти (с местом в файле), если она там есть / the stored programme if it is there
+        r.found.forEach(function (f) {
+          var ch = chOf[f.key], mem = null;
+          EPG.all(ch).forEach(function (p) { if (p.s === f.p.s) mem = p; });
+          if (mem && !mem.d) mem.d = f.p.d;
+          add(ch, mem || f.p);
+        });
+        total = r.total;
+        if (r.stopped && !found.length) { Confirm.open(t('findDesc'), [{ label: t('ok') }], null, t('findStopped')); return; }
+        self.showFound(kind, q, found, total);
+      });
+      return;
+    }
+    Object.keys(lo).forEach(function (key) {
+      EPG.all(chOf[key]).forEach(function (p) {
+        if (p.e > lo[key] && rx.test(p.t)) add(chOf[key], p);
       });
     });
+    Log.info('Поиск ' + kind + ' «' + Text.norm(q) + '», дней ' + days + ': найдено ' + total + ' за ' + (Date.now() - t0) + ' мс');
+    this.showFound(kind, q, found, total);
+  },
+
+  showFound: function (kind, q, found, total) {
     if (found.length > 300) { found.sort(function (a, b) { return a.dist - b.dist; }); found = found.slice(0, 300); }
     found.sort(function (a, b) { return a.cat - b.cat || a.p.s - b.p.s; });
-    Log.info('Поиск ' + kind + ' «' + Text.norm(q) + '»: найдено ' + total + ' за ' + (Date.now() - t0) + ' мс');
     if (!found.length) {
       Confirm.open(t('findTitle'), [{ label: t('ok') }], null,
         t('noResults', { q: q }) + (EPG.state === 'loading' ? ' ' + t('epgLoading') : ''));
@@ -458,15 +521,16 @@ var App = {
 
   listFor: function (gid) {
     var self = this;
+    // 1.5.0: каналы групп 18+ — только в своей группе (не во «Все каналы» / «Избранное»)
     if (gid === '__fav') {
-      return this.channels.filter(function (c) { return self.favSet[c.name] && !self.isRestricted(c.group); });
+      return this.channels.filter(function (c) { return self.favSet[c.name] && !self.isRestricted(c.group) && !self.isAdultGroup(c.group); });
     }
     if (gid === '__find') return this.find ? this.find.chans : [];
     if (gid === '__search') {
       return this.search ? this.search.list.filter(function (c) { return !self.isRestricted(c.group); }) : [];
     }
     if (gid === '__all') {
-      return this.channels.filter(function (c) { return !self.isRestricted(c.group); });
+      return this.channels.filter(function (c) { return !self.isRestricted(c.group) && !self.isAdultGroup(c.group); });
     }
     // Закрытая группа отдаёт каналы только после PIN-кода
     if (this.isHidden(gid) || !this.isOpen(gid) || !this.groupMap[gid]) return [];
@@ -483,6 +547,7 @@ var App = {
 
   toggleFav: function (ch) {
     var f = Config.d.favorites, i = f.indexOf(ch.name);
+    if (i < 0 && this.isAdultGroup(ch.group)) { Toast.show(t('favNoAdult'), 4000); return; }
     if (i >= 0) { f.splice(i, 1); Toast.show(t('favRemoved', { name: ch.name })); }
     else if (f.length >= this.MAX_FAV) { Toast.show(t('favLimit', { n: this.MAX_FAV }), 4000); return; }
     else { f.push(ch.name); Toast.show(t('favAdded', { name: ch.name })); }
@@ -509,7 +574,8 @@ var App = {
 
   playNumber: function (n) {
     var ch = this.byNum[n];
-    if (!ch || this.isRestricted(ch.group)) { Toast.show(t('noChannel', { n: n })); return; }
+    // 1.5.0: каналы групп 18+ по номеру не включаются — только из своей группы
+    if (!ch || this.isRestricted(ch.group) || this.isAdultGroup(ch.group)) { Toast.show(t('noChannel', { n: n })); return; }
     var list = this.listFor('__all');
     this.playFrom(list, list.indexOf(ch), '__all');
   },

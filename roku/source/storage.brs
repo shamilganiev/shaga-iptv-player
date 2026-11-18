@@ -122,6 +122,27 @@ function normalizeUrl(raw as dynamic) as string
     else if low.Left(8) = "https://" then
         s = "https://" + s.Mid(8)
     end if
+    return dropboxDirect(s)
+end function
+
+' 1.5.0: a Dropbox share link gives a web page, not the file: www.dropbox.com -> dl.dropboxusercontent.com,
+' without "dl=0" / "dl=1". Other links are not changed.
+' 1.5.0: ссылка общего доступа Dropbox отдаёт веб-страницу, а не файл: www.dropbox.com ->
+' dl.dropboxusercontent.com, без «dl=0» / «dl=1». Остальные ссылки не меняются.
+function dropboxDirect(s as string) as string
+    low = LCase(s)
+    p = low.Instr("://www.dropbox.com/")
+    if p < 0 then p = low.Instr("://dropbox.com/")
+    if p < 0 then return s
+    hostEnd = s.Instr(p + 3, "/")
+    s = s.Left(p + 3) + "dl.dropboxusercontent.com" + s.Mid(hostEnd)
+    for each q in ["?dl=0&", "?dl=1&"]
+        s = s.Replace(q, "?")
+    end for
+    for each q in ["&dl=0", "&dl=1", "?dl=0", "?dl=1"]
+        if s.EndsWith(q) then s = s.Left(s.Len() - q.Len())
+        s = s.Replace(q + "&", "&")
+    end for
     return s
 end function
 

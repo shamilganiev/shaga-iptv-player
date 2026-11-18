@@ -119,6 +119,11 @@
 
         <Timer id="catTimer" duration="0.25" repeat="false" />
         <Timer id="centerTimer" duration="0.08" repeat="false" />
+        <!-- 1.5.0: description of the programme on air after the cursor stops / описание после остановки курсора -->
+        <Timer id="autoDescTimer" duration="0.7" repeat="false" />
+        <!-- 1.5.0: archive: restart after a long buffering; end of the programme / архив: перезапуск, конец передачи -->
+        <Timer id="bufTimer" duration="25" repeat="false" />
+        <Timer id="archTimer" duration="10" repeat="true" />
         <Timer id="osdTimer" duration="4" repeat="false" />
         <Timer id="launchTimer" duration="10" repeat="false" />
         <Timer id="spinTimer" duration="0.7" repeat="false" />

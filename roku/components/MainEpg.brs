@@ -31,6 +31,11 @@ sub epgInit()
     m.nowBar = m.top.findNode("nowBar")
     m.nowDesc = m.top.findNode("nowDesc")
     m.nextList = m.top.findNode("nextList")
+    ' 1.5.0: descriptions fetched for the column under the video / описания, скачанные для колонки под видео
+    m.descCache = {}
+    m.autoDescWant = invalid
+    m.autoDescTimer = m.top.findNode("autoDescTimer")
+    m.autoDescTimer.observeField("fire", "onAutoDescTimer")
 end sub
 
 ' Guide key of a channel (older saved copies have no "ek") / Ключ канала для программы
@@ -63,11 +68,23 @@ sub epgRequestLoad(force as boolean)
     if m.channels = invalid then return
     m.epgPending = false
     keys = {}
+    depth = {}
+    arch = currentArchive()
     for each ch in m.channels
-        keys[epgKeyOf(ch)] = epgNorm(ch.t)
+        k = epgKeyOf(ch)
+        ' 1.5.0: tvg-name (if given) is the name to find the channel in the guide by
+        ' 1.5.0: tvg-name (если есть) — имя, по которому канал ищется в программе
+        nm = ch.t
+        if ch.tn <> invalid and ch.tn <> "" then nm = ch.tn
+        keys[k] = epgNorm(nm)
+        ' 1.5.0: archive depth: the guide keeps that many days back / глубина архива: столько дней программы назад
+        info = archiveInfo(ch, arch)
+        if info <> invalid then
+            if depth[k] = invalid or depth[k] < info.d then depth[k] = info.d
+        end if
     end for
     m.epgSentUrl = m.epgUrl
-    m.epgSvc.cmd = { action: "load", url: m.epgUrl, force: force, keys: keys }
+    m.epgSvc.cmd = { action: "load", url: m.epgUrl, force: force, keys: keys, depth: depth }
     dbg("EPG", "request load force=" + force.ToStr())
 end sub
 
@@ -227,7 +244,20 @@ sub renderProgramme(items as object)
         m.nowBar.width = Int(580 * pct)
         m.nowBarBg.visible = true
         m.nowBar.visible = true
-        m.nowDesc.text = cur.d
+        ' 1.5.0: no description in memory — fetch it from the file when the cursor stops
+        ' 1.5.0: описания в памяти нет — скачиваем из файла, когда курсор остановился
+        d = cur.d
+        if d = "" and m.epgDetail <> invalid then
+            ck = m.epgDetail.key + "|" + cur.s.ToStr()
+            if m.descCache.DoesExist(ck) then
+                d = m.descCache[ck]
+            else
+                m.autoDescWant = { key: m.epgDetail.key, s: cur.s }
+                m.autoDescTimer.control = "stop"
+                m.autoDescTimer.control = "start"
+            end if
+        end if
+        m.nowDesc.text = d
         first = 1
     else if items.Count() = 0 then
         m.nowDesc.text = m.S.epgNone
@@ -281,11 +311,52 @@ function epgPad2(n as integer) as string
     return n.ToStr()
 end function
 
-' Settings row value / Значение строки в Настройках
+sub onAutoDescTimer()
+    w = m.autoDescWant
+    if w = invalid then return
+    m.epgSvc.descReq = { key: w.key, s: w.s, auto: true }
+end sub
+
+' Answer for the column (called from onDescAns) / Ответ для колонки (из onDescAns)
+sub autoDescArrived(a as object)
+    w = m.autoDescWant
+    if w = invalid or a.key <> w.key or a.s <> w.s then return
+    m.autoDescWant = invalid
+    d = a.d
+    if d.Len() > 200 then d = d.Left(197) + "..."
+    if m.descCache.Count() > 300 then m.descCache = {}
+    m.descCache[a.key + "|" + a.s.ToStr()] = d
+    if d <> "" then refreshInfoPanel()
+end sub
+
+' "15 min ago" / «2 ч назад»
+function agoText(secs as integer) as string
+    a = CreateObject("roDateTime").AsSeconds() - secs
+    if a < 0 then a = 0
+    if a < 3600 then return m.S.agoMin.Replace("{n}", Int(a / 60).ToStr())
+    return m.S.agoHour.Replace("{n}", Int(a / 3600).ToStr())
+end function
+
+' Settings row value. 1.5.0: is the guide up to date (fresh, updating, out of date)?
+' Значение строки в Настройках. 1.5.0: актуальна ли программа (свежая, обновляется, устарела)?
 function epgStatusText() as string
     st = m.epgStatus.state
-    if st = "ready" then return m.S.epgRowValue.Replace("{n}", m.epgStatus.channels.ToStr()).Replace("{t}", m.epgStatus.updated)
-    if st = "loading" then return m.S.epgLoading
+    if st = "ready" then
+        at = 0
+        if m.epgStatus.loadedAt <> invalid then at = m.epgStatus.loadedAt
+        if at = 0 then return m.S.epgRowValue.Replace("{n}", m.epgStatus.channels.ToStr()).Replace("{t}", m.epgStatus.updated)
+        if m.epgStatus.refreshing = true and m.epgStatus.prog <> invalid and m.epgStatus.prog <> "" then
+            return m.S.epgRefreshing.Replace("{p}", m.epgStatus.prog).Replace("{ago}", agoText(at))
+        end if
+        ' Fresh copy is due after 12 h; 13 h and older means the refresh failed
+        ' Свежая копия положена через 12 ч; 13 ч и старше — обновить не удалось
+        if CreateObject("roDateTime").AsSeconds() - at > 13 * 3600 then return m.S.epgOld.Replace("{ago}", agoText(at))
+        return m.S.epgFresh.Replace("{ago}", agoText(at)).Replace("{n}", m.epgStatus.channels.ToStr())
+    end if
+    if st = "loading" then
+        if m.epgStatus.prog <> invalid and m.epgStatus.prog <> "" then return m.S.epgLoadingP.Replace("{p}", m.epgStatus.prog)
+        return m.S.epgLoading
+    end if
     if st = "nourl" then return m.S.epgNoUrl
     if st = "error" then
         if m.epgStatus.error = "gzip" then return m.S.epgGzip

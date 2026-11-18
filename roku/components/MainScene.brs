@@ -60,6 +60,7 @@ sub init()
     m.okFromList = false       ' OK already handled by a list / OK уже обработан списком
     m.okClock = CreateObject("roTimespan")
     m.playlistStale = false    ' fresh copy failed, showing the saved one / свежая копия не загрузилась
+    m.playlistAt = 0           ' 1.5.0: when the fresh list came from the network / когда пришёл свежий список
     m.settingsPage = "main"
     m.arch = invalid           ' archive playback state / состояние показа архива
     m.pendingNew = invalid     ' playlist being added/edited, saved only after it loads / сохраняется после загрузки
@@ -122,6 +123,7 @@ sub init()
     guideInit()
     findInit()
     markInit()
+    playbackInit()
 
     ' --- saved data and language / сохранённые данные и язык ---
     m.data = storageLoad()
@@ -356,6 +358,7 @@ sub onLoaded()
     if r.ok = true then
         m.data.lastOkId = id
         storageSave(m.data)
+        m.playlistAt = CreateObject("roDateTime").AsSeconds()   ' 1.5.0: for the Settings row / для строки Настроек
         if m.channels <> invalid and m.currentId = id then
             swapChannels(r, name)
         else
@@ -578,7 +581,9 @@ sub buildCategories(focusIndex as integer)
         for gi = 0 to m.groups.Count() - 1
             g = m.groups[gi]
             mode = groupMode(m.data, g.name)
-            shown.push(mode = "s")
+            ' 1.5.0: channels of 18+ groups are only in their own group (not in "All channels" / "Favorites")
+            ' 1.5.0: каналы групп 18+ — только в своей группе (не во «Все каналы» / «Избранное»)
+            shown.push(mode = "s" and not groupIsAdult(m.data, g.name))
             nm = g.name
             if nm = "" then nm = m.S.ungrouped
             if mode = "s" then
@@ -809,7 +814,9 @@ sub onChanSelected()
     if ix = m.playingIx and (m.videoState = "playing" or m.videoState = "buffering" or m.videoState = "paused") then
         enterFull()
     else
-        playChannel(ix)
+        ' 1.5.0: the first OK opens the full screen at once (like on LG)
+        ' 1.5.0: первый OK сразу открывает полный экран (как на LG)
+        playChannelFull(ix)
     end if
 end sub
 
@@ -1013,7 +1020,7 @@ function onKeyEvent(key as string, press as boolean) as boolean
         else if key = "fastforward" then
             seekBy(30)
         else if key = "replay" then
-            seekBy(-15)
+            restartStream()      ' 1.5.0: live — restart of the stream / эфир — перезапуск потока
         else if key = "play" then
             togglePause()
         else if key = "options" then
@@ -1083,7 +1090,7 @@ function onKeyEvent(key as string, press as boolean) as boolean
             return true
         end if
     else if key = "replay" then
-        seekBy(-15)
+        restartStream()
         return true
     end if
     return false
