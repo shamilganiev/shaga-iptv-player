@@ -12,7 +12,7 @@ The app contains no channels: you add a link to a playlist you are allowed to us
 |---|---|
 | Roku | 1.5.0 |
 | LG webOS | 1.5.0 |
-| Android | — (planned / в планах) |
+| Android | 0.4.2 |
 
 ## Folders / Папки
 
