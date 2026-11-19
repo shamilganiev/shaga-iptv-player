@@ -39,6 +39,8 @@ var Settings = {
       { key: 'zap', label: t('sZap'), value: t(Config.d.zapInvert ? 'zapList' : 'zapClassic'),
         action: function () { Config.d.zapInvert = !Config.d.zapInvert; Config.save(); Settings.draw(); } },
       { key: 'epg', label: t('sEpg'), value: Settings.epgStatus(), action: function () {
+          // 1.5.1: уже качается — не начинать заново (в 1.5.0 загрузка на 80 МБ начиналась с нуля)
+          if (EPG.loading) { Toast.show(t('epgAlready')); return; }
           EPG.load(App.meta, App.channels, true);
           Toast.show(t('epgLoading'));
         } },

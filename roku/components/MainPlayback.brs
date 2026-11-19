@@ -17,8 +17,16 @@ sub playbackInit()
     m.archEver = false        ' the archive programme has played at least once / архив хоть раз пошёл
     m.archAuto = false        ' the next playArchiveAt is a restart, not the user's choice / следующий запуск — перезапуск
     m.archOkClock = CreateObject("roTimespan")
+    m.restartClock = CreateObject("roTimespan")   ' 1.5.1: last automatic restart / последний автоперезапуск
+    m.restartDone = false
     m.nextAsked = false
     m.nextPlay = false        ' the stream ended: play the next programme / поток закончился — включить следующую
+    m.liveRetry = 0          ' 1.5.1: live restarts in a row / перезапусков эфира подряд
+    m.liveEver = false       ' the live channel has played / эфир хоть раз пошёл
+    m.playAuto = false       ' the next playChannel is a restart / следующий playChannel — перезапуск
+    m.seekTarget = -1        ' 1.5.1: collected archive seek, seconds from the start / накопленная перемотка
+    m.seekTimer = m.top.findNode("seekTimer")
+    m.seekTimer.observeField("fire", "onSeekTimer")
     m.bufTimer = m.top.findNode("bufTimer")
     m.bufTimer.observeField("fire", "onBufTimer")
     m.archTimer = m.top.findNode("archTimer")
@@ -52,6 +60,12 @@ end sub
 ' Live channel (or a file) / Прямой эфир канала (или файл)
 sub playChannel(ix as integer)
     if m.channels = invalid or ix < 0 or ix >= m.channels.Count() then return
+    ' A channel chosen by the user: live restarts are counted anew / Выбран канал: перезапуски эфира считаются заново
+    if not m.playAuto then
+        m.liveRetry = 0
+        m.liveEver = false
+    end if
+    m.playAuto = false
     m.arch = invalid
     ch = m.channels[ix]
     playStream(ix, ch.u, ch.v <> true)
@@ -94,15 +108,58 @@ end function
 sub seekArchive(delta as integer)
     a = m.arch
     if a = invalid or m.playingIx < 0 then return
-    p = archPos() + delta
+    p = archClamp(archPos() + delta)
+    m.archAuto = true      ' same programme: not a new choice / та же передача — не новый выбор
+    playArchiveAt(m.playingIx, a.s, a.e, a.t, p)
+end sub
+
+' Position inside the archive programme, not later than "now − 30 s" / Позиция в передаче, не позже «сейчас − 30 с»
+function archClamp(p as integer) as integer
+    a = m.arch
     maxP = a.e - a.s - 30
     now = CreateObject("roDateTime").AsSeconds()
     if a.s + maxP > now - 30 then maxP = now - 30 - a.s
     if p > maxP then p = maxP
     if p < 0 then p = 0
-    m.archAuto = true      ' same programme: not a new choice / та же передача — не новый выбор
+    return p
+end function
+
+' 1.5.1: seek keys: the target is collected and shown, the stream restarts once 0.9 s after the last press
+' (in 1.5.0 every press restarted the stream: dozens of restarts for a long seek)
+' 1.5.1: кнопки перемотки: цель копится и показывается, поток перезапускается один раз через 0,9 с
+' после последнего нажатия (в 1.5.0 каждое нажатие перезапускало поток — десятки перезапусков)
+sub seekArchiveKey(delta as integer)
+    a = m.arch
+    if a = invalid or m.playingIx < 0 then return
+    if m.seekTarget < 0 then m.seekTarget = archPos()
+    m.seekTarget = archClamp(m.seekTarget + delta)
+    m.osdSub.text = m.S.archLabel + "      " + a.t + "      → " + mmss(m.seekTarget) + " / " + mmss(a.e - a.s)
+    m.osd.visible = true
+    m.osdTimer.control = "stop"
+    m.osdTimer.control = "start"
+    m.seekTimer.control = "stop"
+    m.seekTimer.control = "start"
+end sub
+
+sub onSeekTimer()
+    a = m.arch
+    p = m.seekTarget
+    m.seekTarget = -1
+    if a = invalid or p < 0 or m.playingIx < 0 then return
+    m.archAuto = true
     playArchiveAt(m.playingIx, a.s, a.e, a.t, p)
 end sub
+
+' "1:05:07" / "5:07"
+function mmss(sec as integer) as string
+    if sec < 0 then sec = 0
+    h = sec \ 3600
+    mi = (sec \ 60) mod 60
+    s = sec mod 60
+    t = epgPad2(s)
+    if h > 0 then return h.ToStr() + ":" + epgPad2(mi) + ":" + t
+    return mi.ToStr() + ":" + t
+end function
 
 sub playStream(ix as integer, url as string, live as boolean)
     ch = m.channels[ix]
@@ -116,6 +173,8 @@ sub playStream(ix as integer, url as string, live as boolean)
     if ch.rf <> "" then headers.push("Referer:" + ch.rf)
     if headers.Count() > 0 then c.HttpHeaders = headers
     m.playingIx = ix
+    m.seekTarget = -1
+    m.seekTimer.control = "stop"
     ' 1.4.1: remember the category the playback was started from (for the mark in the group list)
     ' 1.4.1: запоминаем категорию, из которой запустили (для отметки в списке групп)
     if m.view = "channels" and m.curCat >= 0 then
@@ -178,7 +237,8 @@ sub onVideoState()
     if st = "buffering" then
         m.spinTimer.control = "stop"
         m.spinTimer.control = "start"
-        if m.arch <> invalid and m.archEver then
+        ' 1.5.1: live too, if the channel has played / 1.5.1: и эфир, если канал уже шёл
+        if (m.arch <> invalid and m.archEver) or (m.arch = invalid and m.liveEver) then
             m.bufTimer.control = "stop"
             m.bufTimer.control = "start"
         end if
@@ -190,8 +250,10 @@ sub onVideoState()
         m.startTimer.control = "stop"
         if m.arch <> invalid then
             m.archEver = true
-            m.archOkClock.Mark()
+        else
+            m.liveEver = true
         end if
+        m.archOkClock.Mark()
         rememberLastChannel()
         refreshAfterStart()
         if m.epgPending then m.epgStartTimer.control = "start"
@@ -200,6 +262,7 @@ sub onVideoState()
         m.startTimer.control = "stop"
         dbg("ERR", "video error code=" + m.video.errorCode.ToStr() + " msg=" + m.video.errorMsg + " str=" + m.video.errorStr)
         if m.arch <> invalid and archRestart("error") then return
+        if m.arch = invalid and liveRestart("error") then return
         m.lastError = m.S.playError
         if m.arch <> invalid then
             if m.archEver then m.lastError = m.S.archBroken else m.lastError = m.S.archNoStart
@@ -218,6 +281,8 @@ sub onVideoState()
         else
             archRestart("finished")
         end if
+    else if st = "finished" and m.videoState <> "error" and m.lastError = "" then
+        liveRestart("finished")      ' 1.5.1: a live stream must not end / эфир не должен кончаться
     end if
     if m.mode = "main" then updatePreviewStatus()
 end sub
@@ -228,6 +293,7 @@ end sub
 ' нормального показа). Не для передачи, которая так и не пошла: её архива нет.
 function archRestart(why as string) as boolean
     if m.arch = invalid or not m.archEver then return false
+    if recentRestart() then return true
     if m.archOkClock.TotalSeconds() > 120 then m.archRetry = 0
     if m.archRetry >= 3 then
         dbg("PLAY", "archive " + why + ": 3 restarts did not help")
@@ -239,9 +305,42 @@ function archRestart(why as string) as boolean
     return true
 end function
 
+' 1.5.1: the same for live: restart of the channel, up to 3 times in a row, only if it has played
+' (a channel that never starts is just broken). Files (VOD) are not restarted.
+' 1.5.1: то же для эфира: перезапуск канала, до 3 раз подряд, только если он уже шёл
+' (канал, который не стартует, просто не работает). Файлы (VOD) не перезапускаются.
+function liveRestart(why as string) as boolean
+    if m.arch <> invalid or not m.liveEver or m.playingIx < 0 then return false
+    if m.channels[m.playingIx].v = true then return false
+    if recentRestart() then return true
+    if m.archOkClock.TotalSeconds() > 120 then m.liveRetry = 0
+    if m.liveRetry >= 3 then
+        dbg("PLAY", "live " + why + ": 3 restarts did not help")
+        return false
+    end if
+    m.liveRetry = m.liveRetry + 1
+    dbg("PLAY", "live " + why + ": restart " + m.liveRetry.ToStr() + "/3")
+    m.playAuto = true
+    playChannel(m.playingIx)
+    return true
+end function
+
+' 1.5.1: "error" is followed by "finished" of the same stream: one restart within 3 s is enough
+' 1.5.1: за «error» приходит «finished» того же потока — одного перезапуска за 3 с достаточно
+function recentRestart() as boolean
+    if m.restartDone and m.restartClock.TotalMilliseconds() < 3000 then return true
+    m.restartDone = true
+    m.restartClock.Mark()
+    return false
+end function
+
 ' Buffering of the archive lasts 25 s / Буферизация архива длится 25 с
 sub onBufTimer()
-    if m.arch = invalid or m.videoState <> "buffering" then return
+    if m.videoState <> "buffering" then return
+    if m.arch = invalid then
+        liveRestart("buffering 25 s")
+        return
+    end if
     if not archRestart("buffering 25 s") then
         m.lastError = m.S.archBroken
         updatePreviewStatus()
@@ -425,6 +524,10 @@ end function
 
 ' Next/previous channel in the current category / Следующий/предыдущий канал в категории
 sub zap(delta as integer)
+    if m.findShown and m.findItems <> invalid and m.view = "channels" then
+        zapFound(delta)
+        return
+    end if
     n = m.curIdx.Count()
     if n = 0 then return
     posInCat = indexOfChannel(m.playingIx)
@@ -432,6 +535,37 @@ sub zap(delta as integer)
     m.chanList.jumpToItem = posInCat
     m.fullFrom = "chan"
     playChannel(m.curIdx[posInCat])
+end sub
+
+' 1.5.1: in search results Up/Down go to the neighbouring result that can be played now
+' (on air — live, past — archive if it is there); future ones are skipped.
+' 1.5.1: в результатах поиска вверх/вниз — соседний результат, который можно смотреть сейчас
+' (в эфире — эфир, прошедший — архив, если он есть); будущие пропускаются.
+sub zapFound(delta as integer)
+    n = m.findItems.Count()
+    if n = 0 then return
+    p = playingRow()
+    if p < 0 then p = m.chanList.itemFocused
+    if p < 0 then p = 0
+    now = CreateObject("roDateTime").AsSeconds()
+    arch = currentArchive()
+    for k = 1 to n
+        q = (p + delta * k) mod n
+        if q < 0 then q = q + n
+        it = m.findItems[q]
+        ix = m.findIdx[q]
+        if it.s <= now and now < it.e then
+            dbg("PLAY", "zap to result #" + (q + 1).ToStr() + " (live)")
+            m.chanList.jumpToItem = q
+            playChannel(ix)
+            return
+        else if it.e <= now and archiveCovers(archiveInfo(m.channels[ix], arch), it.s, now) then
+            dbg("PLAY", "zap to result #" + (q + 1).ToStr() + " (archive)")
+            m.chanList.jumpToItem = q
+            playArchiveAt(ix, it.s, it.e, it.t, 0)
+            return
+        end if
+    end for
 end sub
 
 ' Seek for files (VOD) only / Перемотка только для файлов (VOD)

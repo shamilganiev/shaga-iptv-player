@@ -155,7 +155,8 @@ var Browser = {
     }
     // 1.5.0: строка «Загрузить ещё сутки» / the "Load one more day" row
     row.classList.toggle('more', !!p.more);
-    if (p.more) {
+    row.classList.toggle('head', !!p.head);
+    if (p.more || p.head) {
       row._p.time.textContent = '';
       marquee(row._p.title, p.t, false);
       row.classList.remove('past', 'cur', 'playing');
@@ -291,12 +292,12 @@ var Browser = {
       return;
     }
     this.progCh = ch;
-    var list = this.guideList(ch, from), now = Date.now(), at = list[0].more ? 1 : 0;
+    var list = this.guideList(ch, from), now = Date.now(), at = (list[0].more || list[0].head) ? 1 : 0;
     for (var i = at; i < list.length; i++) { if (list[i].s <= now) at = i; else break; }
-    if (want) for (var k = 0; k < list.length; k++) if (!list[k].more && want(list[k])) { at = k; break; }
+    if (want) for (var k = 0; k < list.length; k++) if (!list[k].more && !list[k].head && want(list[k])) { at = k; break; }
     if (keepS) {
       for (var j = 0; j < list.length; j++) if (list[j].s === keepS) { at = j - 1; break; }
-      if (at < 0 || list[at].more) at = Math.min(list.length - 1, at + 1);
+      if (at < 0 || list[at].more || list[at].head) at = Math.min(list.length - 1, at + 1);
     }
     this.peek = false;
     this.showGuideNodes(true);
@@ -312,6 +313,11 @@ var Browser = {
     this.progFrom = r.from;
     var list = r.list;
     if (r.more) list = [{ more: true, t: t('loadMore') }].concat(list);
+    else if (list.length) {
+      // 1.5.1: старых дней нет — первая строка говорит, где начинается архив канала
+      var pl = Playlists.byId(App.plId), info = Catchup.info(ch, pl && pl.arch);
+      if (info) list = [{ head: true, t: t('archStart', { n: info.d }) }].concat(list);
+    }
     if (!list.length) list = EPG.all(ch);
     return list;
   },
@@ -344,7 +350,7 @@ var Browser = {
 
   drawProgDesc: function () {
     var p = this.progs.current();
-    if (p && p.more) { $('progDesc').textContent = t('loadMoreHint'); return; }
+    if (p && (p.more || p.head)) { $('progDesc').textContent = t(p.more ? 'loadMoreHint' : 'archStartHint'); return; }
     $('progDesc').textContent = p ? (EPG.hm(p.s) + ' – ' + EPG.hm(p.e) + (p.d ? '   ' + p.d : '')) : '';
   },
 
@@ -355,6 +361,7 @@ var Browser = {
     var ch = this.progCh;
     if (!p || !ch) return;
     if (p.more) { this.loadMore(); return; }
+    if (p.head) return;     // строка «начало архива» ничего не делает
     var now = Date.now(), cur = p.s <= now && now < p.e;
     if (Player.isCurrent(ch) && Player.state !== 'error' && Player.state !== 'idle') {
       var same = Player.arch ? Player.arch.s === Math.floor(p.s / 1000) : cur;
@@ -444,7 +451,7 @@ var Browser = {
     var self = this, items = [], now = Date.now();
     if (this.panel === 'prog') {
       var p = this.progs.current();
-      if (!p || p.more) return;
+      if (!p || p.more || p.head) return;
       items.push({ label: t('ctxDesc'), action: function () { self.showDescription(p); } });
       if (p.s <= now) items.push({ label: t('ctxWatch'), action: function () { self.actOnProgramme(p); } });
       items.push({ label: t('cancel') });
@@ -703,8 +710,9 @@ var Browser = {
 
   onProgKey: function (code) {
     switch (code) {
-      case K.UP: this.progs.move(-1); return true;
-      case K.DOWN: this.progs.move(1); return true;
+      // 1.5.1: список передач не зациклен — вверх останавливается на «Загрузить ещё сутки»
+      case K.UP: this.progs.move(-1, false); return true;
+      case K.DOWN: this.progs.move(1, false); return true;
       case K.CHUP: this.progs.page(-1); this.drawProgDesc(); return true;
       case K.CHDN: this.progs.page(1); this.drawProgDesc(); return true;
       case K.OK: this.actOnProgramme(this.progs.current()); return true;
@@ -775,6 +783,28 @@ var Browser = {
     this.progs.setItems(list, Math.max(0, at));
     this.drawProgDesc();
     this.drawHeads();
+  },
+
+  // 1.5.1: вверх/вниз на полном экране после запуска из результатов поиска — соседний результат,
+  // который можно смотреть сейчас (в эфире — эфир, прошедший — архив, если он есть); будущие пропускаются
+  stepFound: function (d) {
+    var f = App.find, n = f ? f.progs.length : 0;
+    if (!n) return;
+    var p = this.playingRow();
+    if (p < 0) p = this.chans.index;
+    var now = Date.now(), pl = Playlists.byId(App.plId), arch = pl && pl.arch;
+    for (var k = 1; k <= n; k++) {
+      var q = ((p + d * k) % n + n) % n, it = f.progs[q], ch = f.chans[q];
+      var live = it.s <= now && now < it.e;
+      if (!live && !(it.e <= now && Catchup.covers(Catchup.info(ch, arch), Math.floor(it.s / 1000), Math.floor(now / 1000)))) continue;
+      Log.info('Переключение на результат ' + (q + 1) + (live ? ' (эфир)' : ' (архив)'));
+      this.chans.setIndex(q);
+      this.memory.__find = q;
+      this.progCh = ch;
+      if (live) Player.play(f.chans, q, '__find');
+      else Player.playArchive(f.chans, q, '__find', it, 0);
+      return;
+    }
   },
 
   // OK на результате: эфир / архив / описание — как в программе канала

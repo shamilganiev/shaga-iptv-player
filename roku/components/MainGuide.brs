@@ -64,6 +64,14 @@ sub onEpgList()
     if d.more = true then
         m.progItems = [{ more: true, s: 0, e: 0, t: m.S.loadMore, d: "" }]
         m.progItems.Append(d.items)
+    else if d.items.Count() > 0 then
+        ' 1.5.1: no older days: the first row says where the archive of the channel starts
+        ' 1.5.1: старых дней нет — первая строка говорит, где начинается архив канала
+        info = archiveInfo(m.channels[m.progIx], currentArchive())
+        if info <> invalid then
+            m.progItems = [{ more: false, s: 0, e: 0, t: m.S.archStart.Replace("{n}", info.d.ToStr()), d: "" }]
+            m.progItems.Append(d.items)
+        end if
     end if
     if d.items.Count() = 0 then
         msg = m.S.epgNone
@@ -155,7 +163,7 @@ sub onProgFocused()
     i = m.progList.itemFocused
     if i < 0 or i >= m.progItems.Count() then return
     if m.progItems[i].DoesExist("more") then
-        m.progDesc.text = m.S.loadMoreHint
+        if m.progItems[i].more then m.progDesc.text = m.S.loadMoreHint else m.progDesc.text = m.S.archStartHint
         return
     end if
     ' Full title first (the list cuts long ones), then the description / Сначала полное название, потом описание
@@ -175,7 +183,7 @@ end sub
 sub actOnProgramme(it as object)
     if m.progIx < 0 then return
     if it.DoesExist("more") then
-        loadMoreGuide()
+        if it.more then loadMoreGuide()      ' the "start of the archive" row does nothing / строка «начало архива» ничего не делает
         return
     end if
     now = CreateObject("roDateTime").AsSeconds()

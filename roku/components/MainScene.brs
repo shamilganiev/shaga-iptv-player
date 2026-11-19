@@ -997,11 +997,12 @@ function onKeyEvent(key as string, press as boolean) as boolean
             exitFull()
         else if m.arch <> invalid and (key = "left" or key = "right" or key = "rewind" or key = "fastforward" or key = "replay") then
             ' Archive: seek by restarting the link / Архив: перемотка перезапуском ссылки
-            if key = "left" then seekArchive(-60)
-            if key = "right" then seekArchive(60)
-            if key = "rewind" then seekArchive(-300)
-            if key = "fastforward" then seekArchive(300)
-            if key = "replay" then seekArchive(-15)
+            ' 1.5.1: presses are collected, the stream restarts once after 0.9 s / нажатия копятся, перезапуск через 0,9 с
+            if key = "left" then seekArchiveKey(-60)
+            if key = "right" then seekArchiveKey(60)
+            if key = "rewind" then seekArchiveKey(-300)
+            if key = "fastforward" then seekArchiveKey(300)
+            if key = "replay" then seekArchiveKey(-15)
         else if key = "up" or key = "channelUp" then
             zap(zapDelta(true))
         else if key = "down" or key = "channelDown" then
@@ -1102,7 +1103,13 @@ end function
 ' на другой конец. Одно место для обеих колонок (и Настроек в колонке каналов).
 function wrapList(key as string) as boolean
     if m.focusArea = "prog" then
-        lst = m.progList
+        ' 1.5.1: the programme list does not wrap: Up stops on "Load one more day", Down on the last programme
+        ' 1.5.1: список передач не зациклен: вверх — до «Загрузить ещё сутки», вниз — до последней передачи
+        if m.progList.content = invalid then return false
+        n = m.progList.content.getChildCount()
+        i = m.progList.itemFocused
+        if (key = "up" and i = 0) or (key = "down" and i = n - 1) then return true
+        return false
     else if m.focusArea = "chan" then
         lst = m.chanList
     else

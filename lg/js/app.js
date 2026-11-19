@@ -21,7 +21,7 @@ function isInput(el) {
 }
 
 var App = {
-  version: '1.5.0',
+  version: '1.5.1',
   PRIVACY_URL: 'https://shamilganiev.github.io/shaga-iptv-player/privacy.html',
   SUPPORT_URL: 'https://github.com/shamilganiev/shaga-iptv-player/issues',
   MAX_FAV: 200,
@@ -484,8 +484,10 @@ var App = {
     if (this.channels.length) {
       // Сохранённая программа — сразу после старта картинки: чтение копии (4 с на ТВ)
       // в 1.3.1 шло одновременно с запуском канала и тормозило его (7 с вместо 3)
+      // 1.5.1: setTimeout 0 — при запуске канал ещё не включён (onceStarted сработал бы сразу),
+      // и копия (в 1.5.0 до 30 с) читалась одновременно со стартом канала
       var meta = this.meta;
-      Player.onceStarted(function () { EPG.loadCached(meta); });
+      setTimeout(function () { Player.onceStarted(function () { EPG.loadCached(meta); }); }, 0);
       this.scheduleEpg();
     }
   },

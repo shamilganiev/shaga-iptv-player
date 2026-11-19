@@ -10,9 +10,9 @@ The app contains no channels: you add a link to a playlist you are allowed to us
 
 | Platform | Latest version |
 |---|---|
-| Roku | 1.5.0 |
-| LG webOS | 1.5.0 |
-| Android | 0.4.2 |
+| Roku | 1.5.1 |
+| LG webOS | 1.5.1 |
+| Android | 0.5.0 |
 
 ## Folders / Папки
 

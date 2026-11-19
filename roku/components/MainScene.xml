@@ -124,6 +124,8 @@
         <!-- 1.5.0: archive: restart after a long buffering; end of the programme / архив: перезапуск, конец передачи -->
         <Timer id="bufTimer" duration="25" repeat="false" />
         <Timer id="archTimer" duration="10" repeat="true" />
+        <!-- 1.5.1: archive seek keys are collected, the stream restarts once / нажатия перемотки копятся, перезапуск один -->
+        <Timer id="seekTimer" duration="0.9" repeat="false" />
         <Timer id="osdTimer" duration="4" repeat="false" />
         <Timer id="launchTimer" duration="10" repeat="false" />
         <Timer id="spinTimer" duration="0.7" repeat="false" />

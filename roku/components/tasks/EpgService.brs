@@ -546,24 +546,34 @@ function readByRanges(size as integer, chunkSize as integer, t0 as object) as bo
         end if
         last = offset + chunkSize - 1
         if last >= size - 1 then last = size - 1
-        req = newRequest(m.url)
-        req.SetMessagePort(port)
-        req.AddHeader("Range", "bytes=" + offset.ToStr() + "-" + last.ToStr())
-        if not req.AsyncGetToString() then
-            failLoad("network")
-            return false
-        end if
-        msg = wait(60000, port)
-        if type(msg) <> "roUrlEvent" then
-            req.AsyncCancel()
-            failLoad("timeout")
-            return false
-        end if
-        code = msg.GetResponseCode()
-        if code <> 206 and not (code = 200 and offset = 0 and last = size - 1) then
-            failLoad("range http " + code.ToStr())
-            return false
-        end if
+        ' 1.5.1: a piece that did not come is asked again (up to 3 times); in 1.5.0 one slow piece
+        ' threw away a 6-minute download
+        ' 1.5.1: кусок, который не пришёл, просим снова (до 3 раз); в 1.5.0 один медленный кусок
+        ' выбрасывал всю 6-минутную загрузку
+        tries = 0
+        while true
+            tries = tries + 1
+            why = ""
+            req = newRequest(m.url)
+            req.SetMessagePort(port)
+            req.AddHeader("Range", "bytes=" + offset.ToStr() + "-" + last.ToStr())
+            msg = invalid
+            if req.AsyncGetToString() then msg = wait(60000, port)
+            if type(msg) <> "roUrlEvent" then
+                req.AsyncCancel()
+                why = "timeout"
+            else
+                code = msg.GetResponseCode()
+                if code = 206 or (code = 200 and offset = 0 and last = size - 1) then exit while
+                why = "range http " + code.ToStr()
+            end if
+            if tries >= 3 then
+                failLoad(why)
+                return false
+            end if
+            dbg("EPG", "piece at " + Int(offset / 1048576).ToStr() + " MB: " + why + ", asking again (" + tries.ToStr() + "/2)")
+            serviceRequests()
+        end while
         text = msg.GetString()
         if first then
             logFileStart(text)
